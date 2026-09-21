@@ -1,0 +1,18 @@
+import { useState } from 'react';
+import { FileText, Search } from 'lucide-react';
+import RecruiterLayout from '@/layouts/RecruiterLayout';
+import Input from '@/components/ui/Input';
+import EmptyState from '@/components/ui/EmptyState';
+import { statusBadge } from '@/components/ui/Badge';
+import { useBackendData } from '@/data/backendData';
+import { callApi } from '@/utils/api';
+import { useToast } from '@/context/ToastContext';
+
+export default function RecruiterApplications() {
+  const { data: applications, loading, error, setData } = useBackendData('/api/admin/applications');
+  const [search, setSearch] = useState('');
+  const toast = useToast();
+  const filtered = applications.filter(application => !search || application.candidateName.toLowerCase().includes(search.toLowerCase()) || application.jobTitle.toLowerCase().includes(search.toLowerCase()));
+  async function updateStatus(application, status) { try { await callApi(`/api/applications/${application.id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }); setData(items => items.map(item => item.id === application.id ? { ...item, status } : item)); toast('success', 'Application updated', 'The candidate can now see the new stage.'); } catch (reason) { toast('error', 'Update failed', reason.message); } }
+  return <RecruiterLayout><div className="space-y-5"><div><h1 className="text-2xl font-extrabold mb-1" style={{ color: 'var(--text-primary)' }}>Applications</h1><p className="text-sm" style={{ color: 'var(--text-muted)' }}>{applications.length} total applications</p></div><Input placeholder="Search applications..." value={search} onChange={event => setSearch(event.target.value)} icon={<Search size={15} />} />{loading ? <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading applications...</p> : error ? <EmptyState icon={<FileText size={22} />} title="Unable to load applications" description={error.message} /> : filtered.length === 0 ? <EmptyState icon={<FileText size={22} />} title="No applications" description="Applications will appear here as candidates apply." /> : <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}><table className="w-full text-sm"><thead><tr style={{ borderBottom: '1px solid var(--border)' }}>{['Candidate', 'Position', 'Applied', 'Status', 'Update'].map(label => <th key={label} className="px-4 py-3 text-left text-xs" style={{ color: 'var(--text-muted)' }}>{label}</th>)}</tr></thead><tbody>{filtered.map(application => <tr key={application.id} style={{ borderBottom: '1px solid var(--border)' }}><td className="px-4 py-3" style={{ color: 'var(--text-primary)' }}>{application.candidateName}<div className="text-xs" style={{ color: 'var(--text-muted)' }}>{application.candidateEmail}</div></td><td className="px-4 py-3" style={{ color: 'var(--text-secondary)' }}>{application.jobTitle}</td><td className="px-4 py-3" style={{ color: 'var(--text-muted)' }}>{application.appliedDate}</td><td className="px-4 py-3">{statusBadge(application.status)}</td><td className="px-4 py-3"><select value={application.status} onChange={event => updateStatus(application, event.target.value)} className="text-xs rounded border p-1" style={{ background: 'var(--surface)', color: 'var(--text-primary)', borderColor: 'var(--border)' }}><option value="applied">Applied</option><option value="under_review">Under review</option><option value="shortlisted">Shortlisted</option><option value="interview">Interview</option><option value="selected">Selected</option><option value="rejected">Rejected</option></select></td></tr>)}</tbody></table></div>}</div></RecruiterLayout>;
+}
