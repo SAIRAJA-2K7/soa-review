@@ -45,4 +45,42 @@ class JobControllerIntegrationTest {
             .andExpect(jsonPath("$.applications").isArray())
             .andExpect(jsonPath("$.scheduledInterviews").isArray());
     }
+
+    @Test
+    void shouldIncludeNewlyCreatedJobInRecruiterJobList() throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"recruiter@demo.com\",\"password\":\"password123\"}"))
+            .andExpect(status().isOk())
+            .andReturn();
+
+        String token = JsonPath.read(loginResult.getResponse().getContentAsString(), "$.token");
+
+        String payload = """
+            {
+              "title": "Frontend Engineer",
+              "companyName": "Northwind Labs",
+              "location": "Remote",
+              "type": "REMOTE",
+              "experience": "2-4 years",
+              "salaryMin": 120000,
+              "salaryMax": 160000,
+              "description": "Build product experiences for enterprise customers.",
+              "responsibilities": ["Ship polished UIs"],
+              "requirements": ["React and TypeScript"],
+              "skills": ["React", "TypeScript"]
+            }
+            """;
+
+        mockMvc.perform(post("/api/jobs")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(payload))
+            .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/admin/jobs")
+                .header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[*].title").value(org.hamcrest.Matchers.hasItem("Frontend Engineer")));
+    }
 }

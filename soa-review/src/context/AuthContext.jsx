@@ -1,6 +1,6 @@
 import { jsx as _jsx } from "react/jsx-runtime";
 import { createContext, useContext, useState } from 'react';
-import { callApi, normalizeUser } from '@/utils/api';
+import { callApi, normalizeUser, toBackendRole } from '@/utils/api';
 const AuthContext = createContext(undefined);
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(() => {
@@ -27,9 +27,10 @@ export function AuthProvider({ children }) {
     async function register(name, email, password, role) {
         setIsLoading(true);
         try {
+            const backendRole = toBackendRole(role);
             const backendResponse = await callApi('/api/auth/register', {
                 method: 'POST',
-                body: JSON.stringify({ name, email, password, role })
+                body: JSON.stringify({ name, email, password, role: backendRole })
             });
             const newUser = { ...normalizeUser(backendResponse), verified: false, onboarded: false };
             sessionStorage.setItem('ts-user', JSON.stringify(newUser));

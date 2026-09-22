@@ -8,11 +8,13 @@ import { useToast } from '@/context/ToastContext';
 import { useBackendData } from '@/data/backendData';
 import { callApi } from '@/utils/api';
 import { formatSalary, formatRelativeTime } from '@/utils/formatters';
+import { useAuth } from '@/context/AuthContext';
 
 export default function JobDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
+  const { user } = useAuth();
   const { data: jobs, loading, error } = useBackendData('/api/jobs');
   const [applied, setApplied] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -20,7 +22,18 @@ export default function JobDetail() {
   useEffect(() => { if (job?.applied) setApplied(true); }, [job]);
   async function handleApply() {
     setApplying(true);
-    try { await callApi(`/api/jobs/${id}/apply`, { method: 'POST' }); setApplied(true); toast('success', 'Application submitted!', `Your application to ${job.company.name} has been sent.`); }
+    try {
+      await callApi(`/api/jobs/${id}/apply`, {
+        method: 'POST',
+        body: JSON.stringify({
+          candidateId: user?.id,
+          candidateName: user?.name,
+          candidateEmail: user?.email,
+        }),
+      });
+      setApplied(true);
+      toast('success', 'Application submitted!', `Your application to ${job.company.name} has been sent.`);
+    }
     catch (reason) { toast('error', 'Application failed', reason.message); }
     finally { setApplying(false); }
   }

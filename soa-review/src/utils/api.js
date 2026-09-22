@@ -1,4 +1,9 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replace(/\/$/, '');
+
+export function toBackendRole(role) {
+  const normalizedRole = String(role || 'candidate').trim().toLowerCase();
+  return normalizedRole === 'recruiter' || normalizedRole === 'admin' ? 'ADMIN' : 'USER';
+}
 
 export async function callApi(path, options = {}) {
   const token = sessionStorage.getItem('ts-token');
@@ -7,7 +12,7 @@ export async function callApi(path, options = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const response = await fetch(`${API_URL}${path.startsWith('/') ? path : `/${path}`}`, { ...options, headers });
   if (!response.ok) {
     const body = await response.text();
     throw new Error(body || `Request failed with status ${response.status}`);
@@ -23,11 +28,13 @@ export async function callApi(path, options = {}) {
 }
 
 export function normalizeUser(response) {
+  const backendRole = String(response?.role || '').trim().toUpperCase();
+
   return {
     id: response.id || response.email,
     name: response.name || response.email,
     email: response.email,
-    role: response.role === 'ADMIN' ? 'recruiter' : 'candidate',
+    role: backendRole === 'ADMIN' || backendRole === 'RECRUITER' ? 'recruiter' : 'candidate',
     verified: typeof response.verified === 'boolean' ? response.verified : false,
     onboarded: typeof response.onboarded === 'boolean' ? response.onboarded : false,
   };

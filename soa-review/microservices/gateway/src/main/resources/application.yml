@@ -1,0 +1,61 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+        - id: auth-service
+          uri: lb://AUTH-SERVICE
+          predicates:
+            - Path=/api/auth/**
+        - id: user-profile
+          uri: lb://AUTH-SERVICE
+          predicates:
+            - Path=/api/user/profile,/api/user/profile/**
+        - id: user-saved-jobs
+          uri: lb://JOB-SERVICE
+          predicates:
+            - Path=/api/user/saved-jobs,/api/user/saved-jobs/**
+        - id: user-interviews
+          uri: lb://APPLICATION-SERVICE
+          predicates:
+            - Path=/api/user/interviews,/api/user/interviews/**
+        - id: job-service
+          uri: lb://JOB-SERVICE
+          predicates:
+            - Path=/api/jobs/**
+        - id: application-service
+          uri: ${APPLICATION_SERVICE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/applications/**,/api/admin/**
+
+jwt:
+  secret: talentsync-jwt-secret-key-change-me-2026
+  expiration-ms: 86400000
+
+eureka:
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+  instance:
+    hostname: localhost
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${server.port}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always

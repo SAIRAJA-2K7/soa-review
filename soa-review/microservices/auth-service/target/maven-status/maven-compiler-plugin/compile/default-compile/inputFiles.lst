@@ -1,0 +1,10 @@
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\AuthServiceApplication.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\config\DemoUserInitializer.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\config\JwtUtil.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\config\SecurityConfig.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\controller\HealthController.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\controller\UserProfileController.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\entity\AppUser.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\repository\UserRepository.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\service\OtpService.java
+C:\Users\mekas\Downloads\soa-review\soa-review\microservices\auth-service\src\main\java\com\soareview\authservice\service\UserService.java

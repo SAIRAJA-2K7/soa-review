@@ -1,0 +1,9 @@
+com\soareview\authservice\config\JwtUtil.class
+com\soareview\authservice\service\OtpService.class
+com\soareview\authservice\AuthServiceApplication.class
+com\soareview\authservice\controller\HealthController.class
+com\soareview\authservice\config\SecurityConfig.class
+com\soareview\authservice\repository\UserRepository.class
+com\soareview\authservice\controller\UserProfileController.class
+com\soareview\authservice\entity\AppUser.class
+com\soareview\authservice\service\UserService.class
