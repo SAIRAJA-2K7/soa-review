@@ -37,9 +37,8 @@ spring:
             - Path=/api/applications/**,/api/admin/**
 
 jwt:
-  secret: talentsync-jwt-secret-key-change-me-2026
+  secret: ${JWT_SECRET}
   expiration-ms: 86400000
-
 eureka:
   client:
     register-with-eureka: true

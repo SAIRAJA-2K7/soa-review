@@ -1,5 +1,0 @@
-com\soareview\gateway\controller\GatewayController.class
-com\soareview\gateway\GatewayApplication.class
-com\soareview\gateway\config\SecurityConfig.class
-com\soareview\gateway\JwtAuthenticationFilter.class
-com\soareview\gateway\config\CorsConfig.class
