@@ -32,7 +32,7 @@ spring:
           predicates:
             - Path=/api/jobs/**
         - id: application-service
-          uri: ${APPLICATION_SERVICE_URL:http://localhost:8084}
+          uri: ${APPLICATION_SERVICE_URI:lb://APPLICATION-SERVICE}
           predicates:
             - Path=/api/applications/**,/api/admin/**
 
@@ -57,4 +57,4 @@ management:
         include: health,info
   endpoint:
     health:
-      show-details: always
+      show-details: never

@@ -1,0 +1,268 @@
+2400031146@kluniversity.in
+sssbnr2007@gmail.com
+2400031695cse2@gmail.com
+
+CRUD OPERATIONS:
+
+DELETE FROM users;
+
+DELETE FROM users
+WHERE id = 6;
+
+List application tables:
+SELECT table_schema, table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_type = 'BASE TABLE'
+ORDER BY table_name;
+
+
+Check the allowed account roles:
+SELECT conname AS constraint_name,
+       pg_get_constraintdef(oid) AS constraint_definition
+FROM pg_constraint
+WHERE conrelid = 'public.users'::regclass
+  AND contype = 'c'
+ORDER BY conname;
+
+
+
+List accounts without exposing password data:
+SELECT id,
+       name,
+       role,
+       requested_role,
+       verified,
+       active,
+       created_at
+FROM public.users
+ORDER BY id;
+
+
+view jobs:
+SELECT id,
+       payload::jsonb ->> 'title' AS title,
+       payload::jsonb ->> 'location' AS location,
+       payload::jsonb ->> 'type' AS job_type,
+       payload::jsonb ->> 'published' AS published,
+       payload::jsonb ->> 'recruiterEmail' AS recruiter
+FROM public.job_service_documents
+WHERE collection_name = 'jobs'
+ORDER BY id;
+
+
+view applications and their status:
+SELECT id,
+       payload::jsonb ->> 'candidateId' AS candidate_id,
+       payload::jsonb ->> 'candidateName' AS candidate_name,
+       payload::jsonb ->> 'jobId' AS job_id,
+       payload::jsonb ->> 'jobTitle' AS job_title,
+       payload::jsonb ->> 'status' AS application_status,
+       payload::jsonb ->> 'appliedDate' AS applied_date
+FROM public.application_service_documents
+WHERE collection_name = 'applications'
+ORDER BY id;
+
+
+
+See shortlisted, interviewing, and selected applicants:
+SELECT id,
+       payload::jsonb ->> 'candidateId' AS candidate_id,
+       payload::jsonb ->> 'candidateName' AS candidate_name,
+       payload::jsonb ->> 'jobTitle' AS job_title,
+       payload::jsonb ->> 'status' AS application_status
+FROM public.application_service_documents
+WHERE collection_name = 'applications'
+  AND payload::jsonb ->> 'status'
+      IN ('shortlisted', 'interview', 'selected')
+ORDER BY id;
+
+
+Count applications by stage:
+SELECT payload::jsonb ->> 'status' AS application_status,
+       COUNT(*) AS application_count
+FROM public.application_service_documents
+WHERE collection_name = 'applications'
+GROUP BY payload::jsonb ->> 'status'
+ORDER BY application_status;
+
+Find applications for one candidate:
+SELECT id,
+       payload::jsonb ->> 'candidateId' AS candidate_id,
+       payload::jsonb ->> 'candidateName' AS candidate_name,
+       payload::jsonb ->> 'jobTitle' AS job_title,
+       payload::jsonb ->> 'status' AS application_status,
+       payload::jsonb ->> 'appliedDate' AS applied_date
+FROM public.application_service_documents
+WHERE collection_name = 'applications'
+  AND payload::jsonb ->> 'candidateId' = '14'
+ORDER BY id;
+
+View scheduled interviews:
+SELECT id,
+       payload::jsonb ->> 'candidateId' AS candidate_id,
+       payload::jsonb ->> 'candidate' AS candidate_name,
+       payload::jsonb ->> 'jobId' AS job_id,
+       payload::jsonb ->> 'job' AS job_title,
+       payload::jsonb ->> 'date' AS interview_date,
+       payload::jsonb ->> 'time' AS interview_time,
+       payload::jsonb ->> 'mode' AS interview_mode,
+       payload::jsonb ->> 'status' AS interview_status
+FROM public.application_service_documents
+WHERE collection_name = 'interviews'
+ORDER BY id;
+
+
+
+View saved jobs:
+SELECT id,
+       payload::jsonb ->> 'candidateEmail' AS candidate,
+       payload::jsonb ->> 'jobId' AS job_id
+FROM public.job_service_documents
+WHERE collection_name = 'saved-jobs'
+ORDER BY id;
+
+
+View recruiter company profiles:
+SELECT id,
+       record_key AS recruiter_key,
+       payload::jsonb ->> 'name' AS company_name,
+       payload::jsonb ->> 'website' AS website,
+       payload::jsonb ->> 'size' AS company_size,
+       payload::jsonb ->> 'description' AS description
+FROM public.application_service_documents
+WHERE collection_name = 'company'
+ORDER BY id;
+
+
+View recent audit events from all three services:
+SELECT occurred_at,
+       service_name,
+       actor_id,
+       actor_role,
+       operation,
+       resource_type,
+       resource_id,
+       outcome,
+       http_status,
+       correlation_id
+FROM (
+    SELECT occurred_at, service_name, actor_id, actor_role, operation,
+           resource_type, resource_id, outcome, http_status, correlation_id
+    FROM public.auth_service_audit_events
+
+    UNION ALL
+
+    SELECT occurred_at, service_name, actor_id, actor_role, operation,
+           resource_type, resource_id, outcome, http_status, correlation_id
+    FROM public.job_service_audit_events
+
+    UNION ALL
+
+    SELECT occurred_at, service_name, actor_id, actor_role, operation,
+           resource_type, resource_id, outcome, http_status, correlation_id
+    FROM public.application_service_audit_events
+) AS audit_events
+ORDER BY occurred_at DESC
+LIMIT 100;
+
+
+
+To show only write events, add this condition to the outer query, before ORDER BY:
+WHERE operation IN ('CREATE', 'UPDATE', 'DELETE')
+
+
+SAFE STOP AND START THE PROJECT
+
+TO STOP:
+
+Stop the frontend in VS Code: find the terminal running Vite and press Ctrl+C
+
+Stop the microservices:
+
+$expectedJars = @(
+    'eureka-server-1.0.0.jar',
+    'auth-service-1.0.0.jar',
+    'job-service-1.0.0.jar',
+    'application-service-1.0.0.jar',
+    'gateway-1.0.0.jar'
+)
+
+$stoppedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
+
+Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" |
+    ForEach-Object {
+        $processInfo = $_
+        $jarMatch = [regex]::Match(
+            [string]$processInfo.CommandLine,
+            '(?i)-jar\s+"?([^"\s]+)'
+        )
+
+        if ($jarMatch.Success) {
+            $jarName = [System.IO.Path]::GetFileName($jarMatch.Groups[1].Value)
+
+            if ($expectedJars -contains $jarName) {
+                $processIdValue = [int]$processInfo.ProcessId
+                if ($stoppedProcessIds.Add($processIdValue)) {
+                    Stop-Process -Id $processIdValue
+                    Write-Host "Stopped $jarName (PID $processIdValue)."
+                }
+            }
+        }
+    }
+
+
+Check that TalentSync ports are free:
+
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+    Where-Object { $_.LocalPort -in 8761,8080,8081,8083,8084 } |
+    Select-Object LocalPort, OwningProcess
+
+
+TO START:
+
+Ensure PostgreSQL is running and your intended database is available.
+
+
+Start the microservices from PowerShell:
+Set-Location 'C:\Users\mekas\Downloads\soa-review\soa-review\microservices'
+.\start-microservices.ps1
+
+
+Start the frontend in a separate VS Code terminal:
+
+Set-Location 'C:\Users\mekas\Downloads\soa-review\soa-review'
+npm run dev
+
+
+Open the URL Vite prints in that terminal.
+
+Check the service health pages:
+Eureka: http://localhost:8761/actuator/health
+Auth: http://localhost:8081/api/auth/health
+Job: http://localhost:8083/actuator/health
+Application: http://localhost:8084/actuator/health
+Gateway: http://localhost:8080/actuator/health
+
+
+Recruiter signup reminder: your database previously rejected RECRUITER because of its role constraint. Before trying recruiter signup, back up the intended database and apply:
+
+BEGIN;
+
+ALTER TABLE public.users
+    DROP CONSTRAINT IF EXISTS users_role_check;
+
+ALTER TABLE public.users
+    ADD CONSTRAINT users_role_check
+    CHECK (role IN ('USER', 'RECRUITER', 'ADMIN'));
+
+COMMIT;
+
+verify:
+SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'public.users'::regclass
+  AND conname = 'users_role_check';
+
+
+if needed restart auth-service

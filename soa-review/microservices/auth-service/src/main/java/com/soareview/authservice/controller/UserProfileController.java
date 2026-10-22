@@ -17,7 +17,6 @@ public class UserProfileController {
 
     public UserProfileController(UserService userService) {
         this.userService = userService;
-        this.userService.ensureDemoUser();
     }
 
     @GetMapping("/profile")
@@ -33,6 +32,7 @@ public class UserProfileController {
         profile.put("name", user.getName());
         profile.put("email", user.getEmail());
         profile.put("role", user.getRole());
+        profile.put("requestedRole", user.getRequestedRole());
         profile.put("verified", user.isVerified());
         profile.put("onboarded", user.isOnboarded());
         profile.put("professionalTitle", user.getProfessionalTitle());

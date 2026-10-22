@@ -22,9 +22,21 @@ public class JwtUtil {
     private long expirationMs;
 
     public String generateToken(String email, String role) {
+        return generateToken(email, role, false);
+    }
+
+    public String generateToken(String email, String role, boolean verified) {
+        return generateToken(null, email, role, verified);
+    }
+
+    public String generateToken(Long actorId, String email, String role, boolean verified) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("role", role);
         claims.put("email", email);
+        claims.put("verified", verified);
+        if (actorId != null) {
+            claims.put("actorId", actorId);
+        }
 
         Date now = new Date();
         Date expiry = new Date(now.getTime() + expirationMs);
@@ -66,6 +78,16 @@ public class JwtUtil {
                 .parseSignedClaims(token)
                 .getPayload();
         return String.valueOf(claims.get("role"));
+    }
+
+    public String extractActorId(String token) {
+        Claims claims = Jwts.parser()
+                .verifyWith(getSigningKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+        Object actorId = claims.get("actorId");
+        return actorId == null ? claims.getSubject() : String.valueOf(actorId);
     }
 
     private SecretKey getSigningKey() {

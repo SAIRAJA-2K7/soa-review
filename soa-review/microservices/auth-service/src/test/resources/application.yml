@@ -1,0 +1,26 @@
+jwt:
+  secret: test-jwt-secret-key-for-service-tests-2026
+  expiration-ms: 86400000
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:auth_service_test;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  mail:
+    host: localhost
+    port: 3025
+eureka:
+  client:
+    enabled: false
+app:
+  demo-users:
+    enabled: false
+management:
+  health:
+    mail:
+      enabled: false

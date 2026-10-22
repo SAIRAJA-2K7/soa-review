@@ -19,6 +19,7 @@ export function AuthProvider({ children }) {
             sessionStorage.setItem('ts-user', JSON.stringify(normalizedUser));
             sessionStorage.setItem('ts-token', backendUser.token);
             setUser(normalizedUser);
+            return normalizedUser;
         }
         finally {
             setIsLoading(false);
@@ -68,6 +69,7 @@ export function AuthProvider({ children }) {
             sessionStorage.setItem('ts-user', JSON.stringify(normalizedUser));
             sessionStorage.setItem('ts-token', response.token || '');
             setUser(normalizedUser);
+            return normalizedUser;
         }
         finally {
             setIsLoading(false);

@@ -1,8 +1,18 @@
 package com.soareview.applicationservice.controller;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.util.StringUtils;
+import org.springframework.dao.DataIntegrityViolationException;
+import jakarta.annotation.PostConstruct;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestTemplate;
+import com.soareview.applicationservice.persistence.ApplicationDocumentStore;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -10,17 +20,30 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.time.LocalDate;
-import java.util.concurrent.atomic.AtomicLong;
 
 @RestController
 @RequestMapping("/api")
 public class ApplicationController {
 
     private static final List<Map<String, Object>> APPLICATIONS = new ArrayList<>();
-    private static final AtomicLong APPLICATION_ID_GENERATOR = new AtomicLong(4L);
     private static final List<Map<String, Object>> JOBS = new ArrayList<>();
     private static final List<Map<String, Object>> INTERVIEWS = new ArrayList<>();
     private static final Map<String, Object> COMPANY = new LinkedHashMap<>();
+
+    private final ApplicationDocumentStore documentStore;
+    private final RestTemplate restTemplate;
+    private final String authServiceUrl;
+    private final String jobSyncSecret;
+
+    public ApplicationController(ApplicationDocumentStore documentStore,
+                                 RestTemplate restTemplate,
+                                 @Value("${auth-service.url:http://AUTH-SERVICE}") String authServiceUrl,
+                                 @Value("${job-sync.secret}") String jobSyncSecret) {
+        this.documentStore = documentStore;
+        this.restTemplate = restTemplate;
+        this.authServiceUrl = authServiceUrl;
+        this.jobSyncSecret = jobSyncSecret;
+    }
 
     private static Map<String, Object> mapOf(Object... entries) {
         if (entries.length % 2 != 0) {
@@ -160,47 +183,115 @@ public class ApplicationController {
         COMPANY.put("description", "We build talent infrastructure for modern hiring teams.");
     }
 
+    @PostConstruct
+    void seedPersistentCollections() {
+        seedCollection("jobs", JOBS);
+        if (documentStore.findAll("applications").isEmpty()) {
+            APPLICATIONS.forEach(application -> {
+                application.put("recruiterEmail", "recruiter@demo.com");
+                documentStore.save("applications", String.valueOf(application.get("id")), application);
+            });
+        }
+        if (documentStore.findAll("interviews").isEmpty()) {
+            List<Map<String, Object>> applications = documentStore.findAll("applications");
+            INTERVIEWS.forEach(interview -> {
+                String candidateId = String.valueOf(interview.get("candidateId"));
+                applications.stream()
+                        .filter(application -> candidateId.equals(String.valueOf(application.get("candidateId"))))
+                        .findFirst()
+                        .ifPresent(application -> interview.put("candidateEmail", application.get("candidateEmail")));
+                interview.putIfAbsent("recruiterEmail", "recruiter@demo.com");
+                documentStore.save("interviews", String.valueOf(interview.get("id")), interview);
+            });
+        }
+        if (documentStore.find("company", "recruiter@demo.com") == null) {
+            documentStore.save("company", "recruiter@demo.com", COMPANY);
+        }
+    }
+
+    private void seedCollection(String name, List<Map<String, Object>> seeds) {
+        if (documentStore.findAll(name).isEmpty()) {
+            seeds.forEach(record -> {
+                record.putIfAbsent("recruiterEmail", "recruiter@demo.com");
+                documentStore.save(name, String.valueOf(record.get("id")), record);
+            });
+        }
+    }
+
+    @PutMapping("/internal/jobs/{id}")
+    public Map<String, Object> syncRecruiterJob(@PathVariable Long id, @RequestBody Map<String, Object> job,
+                                                @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail,
+                                                @RequestHeader(value = "X-Service-Token", required = false) String serviceToken) {
+        requireIdentity(recruiterEmail);
+        if (!StringUtils.hasText(serviceToken) || !java.security.MessageDigest.isEqual(
+                jobSyncSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                serviceToken.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Service authentication required");
+        }
+        Map<String, Object> persisted = new LinkedHashMap<>(job);
+        persisted.put("id", id);
+        persisted.put("recruiterEmail", recruiterEmail);
+        return documentStore.save("jobs", String.valueOf(id), persisted);
+    }
+
     @GetMapping("/applications")
-    public List<Map<String, Object>> getApplications() {
-        return APPLICATIONS;
+    public List<Map<String, Object>> getApplications(
+            @RequestHeader(value = "X-User-Email", required = false) String candidateEmail) {
+        requireIdentity(candidateEmail);
+        return documentStore.findAll("applications").stream()
+                .filter(application -> candidateEmail.equalsIgnoreCase(String.valueOf(application.get("candidateEmail"))))
+                .toList();
     }
 
     @GetMapping("/applications/{id}")
-    public Map<String, Object> getApplication(@PathVariable Long id) {
-        return APPLICATIONS.stream()
-                .filter(app -> String.valueOf(app.get("id")).equals(String.valueOf(id)))
-                .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Application not found"));
+    public Map<String, Object> getApplication(@PathVariable Long id,
+                                               @RequestHeader(value = "X-User-Email", required = false) String candidateEmail) {
+        requireIdentity(candidateEmail);
+        Map<String, Object> application = documentStore.find("applications", String.valueOf(id));
+        if (application == null || !candidateEmail.equalsIgnoreCase(String.valueOf(application.get("candidateEmail")))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Application not found");
+        }
+        return application;
     }
 
     @PostMapping("/applications")
-    public synchronized Map<String, Object> createApplication(@RequestBody Map<String, Object> request) {
-        String candidateEmail = String.valueOf(request.getOrDefault("candidateEmail", "")).trim().toLowerCase();
-        String jobId = String.valueOf(request.getOrDefault("jobId", ""));
+    public Map<String, Object> createApplication(@RequestBody Map<String, Object> request,
+                                                 @RequestHeader(value = "X-User-Email", required = false) String authenticatedEmail,
+                                                 @RequestHeader(value = "Authorization", required = false) String authorization) {
+        Object requestedJobId = request.get("jobId");
+        String jobId = requestedJobId == null ? "" : String.valueOf(requestedJobId);
 
-        if (candidateEmail.isBlank() || jobId.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Candidate email and job id are required");
+        requireIdentity(authenticatedEmail);
+        if (jobId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Job id is required");
         }
 
-        boolean alreadyApplied = APPLICATIONS.stream().anyMatch(application ->
-                candidateEmail.equalsIgnoreCase(String.valueOf(application.get("candidateEmail"))) &&
-                jobId.equals(String.valueOf(application.get("jobId"))));
-        if (alreadyApplied) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "You have already applied to this job");
+        Map<String, Object> candidateProfile = loadCandidateProfile(authorization);
+        String candidateEmail = String.valueOf(candidateProfile.get("email")).trim().toLowerCase();
+        if (!candidateEmail.equalsIgnoreCase(authenticatedEmail)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Candidate identity does not match the JWT");
+        }
+
+        Map<String, Object> job = documentStore.find("jobs", jobId);
+        if (job == null || Boolean.FALSE.equals(job.get("published"))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Published job not found");
         }
 
         String appliedDate = LocalDate.now().toString();
         Map<String, Object> application = new LinkedHashMap<>();
-        application.put("id", APPLICATION_ID_GENERATOR.getAndIncrement());
-        application.put("candidateId", request.getOrDefault("candidateId", candidateEmail));
-        application.put("candidateName", request.getOrDefault("candidateName", candidateEmail));
+        application.put("candidateId", candidateProfile.get("id"));
+        application.put("candidateName", candidateProfile.getOrDefault("name", candidateEmail));
         application.put("candidateEmail", candidateEmail);
-        application.put("candidateTitle", request.getOrDefault("candidateTitle", ""));
-        application.put("candidateLocation", request.getOrDefault("candidateLocation", ""));
-        application.put("candidateBio", request.getOrDefault("candidateBio", ""));
+        application.put("candidateTitle", candidateProfile.getOrDefault("professionalTitle", ""));
+        application.put("candidateLocation", candidateProfile.getOrDefault("location", ""));
+        application.put("candidateBio", candidateProfile.getOrDefault("bio", ""));
         application.put("jobId", request.get("jobId"));
-        application.put("jobTitle", request.getOrDefault("jobTitle", "Open Role"));
-        application.put("companyName", request.getOrDefault("companyName", "TalentSync"));
+        application.put("jobTitle", job.getOrDefault("title", "Open Role"));
+        Object company = job.get("company");
+        Object companyName = company instanceof Map<?, ?> companyMap ? companyMap.get("name") : company;
+        application.put("companyName", companyName == null
+            ? job.getOrDefault("companyName", "TalentSync") : String.valueOf(companyName));
+        application.put("recruiterEmail", job.getOrDefault("recruiterEmail", ""));
         application.put("status", "under_review");
         application.put("appliedDate", appliedDate);
         application.put("timeline", List.of(mapOf(
@@ -208,68 +299,114 @@ public class ApplicationController {
                 "date", appliedDate,
                 "completed", true,
                 "note", "Application submitted successfully")));
-        APPLICATIONS.add(application);
-        return application;
+        try {
+            return documentStore.createUnique("applications", "application-reservations",
+                    candidateEmail + ":" + jobId, application);
+        } catch (DataIntegrityViolationException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "You have already applied to this job", exception);
+        }
+    }
+
+    private Map<String, Object> loadCandidateProfile(String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Bearer token is required");
+        }
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.AUTHORIZATION, authorization);
+        try {
+            Map<String, Object> profile = restTemplate.exchange(authServiceUrl + "/api/user/profile",
+                    HttpMethod.GET, new HttpEntity<>(headers), Map.class).getBody();
+            if (profile == null || profile.get("email") == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Auth service returned no candidate profile");
+            }
+            return profile;
+        } catch (RestClientException exception) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Candidate profile service is unavailable", exception);
+        }
     }
 
     @GetMapping("/user/interviews")
-    public List<Map<String, Object>> getUserInterviews() {
-        List<Map<String, Object>> interviews = new ArrayList<>();
-        interviews.add(mapOf(
-                "id", 1001,
-                "type", "Technical",
-                "job", "Senior Product Engineer",
-                "date", "2026-09-25",
-                "time", "10:30 AM",
-                "mode", "Video",
-                "interviewer", "Sarah Chen"
-        ));
-        interviews.add(mapOf(
-                "id", 1002,
-                "type", "Final",
-                "job", "Clinical Data Scientist",
-                "date", "2026-09-27",
-                "time", "2:00 PM",
-                "mode", "Zoom",
-                "interviewer", "Priya Nair"
-        ));
-        return interviews;
+        public List<Map<String, Object>> getUserInterviews(
+            @RequestHeader(value = "X-User-Email", required = false) String candidateEmail) {
+        requireIdentity(candidateEmail);
+        return documentStore.findAll("interviews").stream()
+            .filter(interview -> candidateEmail.equalsIgnoreCase(String.valueOf(interview.get("candidateEmail"))))
+            .map(interview -> mapOf(
+                "id", interview.get("id"),
+                "type", interview.get("type"),
+                "job", interview.get("job"),
+                "date", interview.get("date"),
+                "time", interview.get("time"),
+                "mode", interview.get("mode"),
+                "interviewer", interview.get("interviewer")))
+            .toList();
     }
 
     @PatchMapping("/applications/{id}/status")
-    public Map<String, Object> updateStatus(@PathVariable Long id, @RequestBody Map<String, String> request) {
-        String status = request.getOrDefault("status", "UNDER_REVIEW");
-        Map<String, Object> application = getApplication(id);
-        application.put("status", status.toLowerCase());
-        return application;
+    public Map<String, Object> updateStatus(@PathVariable Long id, @RequestBody Map<String, String> request,
+                                            @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        String status = request.getOrDefault("status", "under_review").trim().toLowerCase();
+        if (!List.of("under_review", "shortlisted", "interview", "selected", "rejected").contains(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported application status");
+        }
+        Map<String, Object> application = documentStore.find("applications", String.valueOf(id));
+        if (application == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Application not found");
+        }
+        if (!recruiterEmail.equalsIgnoreCase(String.valueOf(application.get("recruiterEmail")))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot update another recruiter's application");
+        }
+        application.put("status", status);
+        List<Map<String, Object>> timeline = new ArrayList<>();
+        Object currentTimeline = application.get("timeline");
+        if (currentTimeline instanceof List<?> items) {
+            items.stream().filter(Map.class::isInstance).map(item -> (Map<String, Object>) item).forEach(timeline::add);
+        }
+        timeline.add(mapOf("stage", status.replace('_', ' '), "date", LocalDate.now().toString(),
+                "completed", true, "note", "Application status updated by recruiter"));
+        application.put("timeline", timeline);
+        return documentStore.save("applications", String.valueOf(id), application);
     }
 
     @GetMapping("/admin/dashboard")
-    public Map<String, Object> recruiterDashboard() {
+    public Map<String, Object> recruiterDashboard(
+            @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        List<Map<String, Object>> applications = applicationsForRecruiter(recruiterEmail);
+        List<Map<String, Object>> interviews = interviewsForRecruiter(recruiterEmail);
+        List<Map<String, Object>> jobs = jobsForRecruiter(recruiterEmail);
         Map<String, Object> dashboard = new HashMap<>();
-        dashboard.put("activeJobs", JOBS.size());
-        dashboard.put("totalApplicants", APPLICATIONS.size());
-        dashboard.put("shortlisted", (int) APPLICATIONS.stream().filter(app -> "shortlisted".equalsIgnoreCase(String.valueOf(app.get("status")))).count());
-        dashboard.put("interviews", INTERVIEWS.size());
-        dashboard.put("jobs", JOBS);
-        dashboard.put("applications", APPLICATIONS);
-        dashboard.put("scheduledInterviews", INTERVIEWS);
+        dashboard.put("activeJobs", jobs.stream().filter(job -> !Boolean.FALSE.equals(job.get("published"))).count());
+        dashboard.put("totalApplicants", applications.size());
+        dashboard.put("shortlisted", (int) applications.stream().filter(app -> "shortlisted".equalsIgnoreCase(String.valueOf(app.get("status")))).count());
+        dashboard.put("interviews", interviews.size());
+        dashboard.put("jobs", jobs);
+        dashboard.put("applications", applications);
+        dashboard.put("scheduledInterviews", interviews);
         return dashboard;
     }
 
     @GetMapping("/admin/jobs")
-    public List<Map<String, Object>> recruiterJobs() {
-        return JOBS;
+    public List<Map<String, Object>> recruiterJobs(
+            @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        return jobsForRecruiter(recruiterEmail);
     }
 
     @GetMapping("/admin/applications")
-    public List<Map<String, Object>> recruiterApplications() {
-        return APPLICATIONS;
+    public List<Map<String, Object>> recruiterApplications(
+            @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        return applicationsForRecruiter(recruiterEmail);
     }
 
     @GetMapping("/admin/candidates")
-    public List<Map<String, Object>> recruiterCandidates() {
-        return APPLICATIONS.stream().map(application -> {
+    public List<Map<String, Object>> recruiterCandidates(
+            @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        return applicationsForRecruiter(recruiterEmail).stream().map(application -> {
             Map<String, Object> candidate = new LinkedHashMap<>();
             candidate.put("id", application.get("candidateId"));
             candidate.put("name", application.get("candidateName"));
@@ -287,28 +424,38 @@ public class ApplicationController {
     }
 
     @GetMapping("/admin/interviews")
-    public List<Map<String, Object>> recruiterInterviews() {
-        return INTERVIEWS;
+    public List<Map<String, Object>> recruiterInterviews(
+            @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        return interviewsForRecruiter(recruiterEmail);
     }
 
     @PostMapping("/admin/interviews")
-    public Map<String, Object> createInterview(@RequestBody Map<String, Object> payload) {
+    public Map<String, Object> createInterview(@RequestBody Map<String, Object> payload,
+                                                @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
         Map<String, Object> interview = new LinkedHashMap<>();
         Long candidateId = Long.valueOf(String.valueOf(payload.getOrDefault("candidateId", 101)));
         Long jobId = Long.valueOf(String.valueOf(payload.getOrDefault("jobId", 1)));
-        String candidateName = APPLICATIONS.stream()
+        List<Map<String, Object>> applications = applicationsForRecruiter(recruiterEmail);
+        List<Map<String, Object>> jobs = jobsForRecruiter(recruiterEmail);
+        boolean candidateApplied = applications.stream().anyMatch(application ->
+            String.valueOf(application.get("candidateId")).equals(String.valueOf(candidateId)) &&
+            String.valueOf(application.get("jobId")).equals(String.valueOf(jobId)));
+        if (!candidateApplied) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Candidate must have an application for this job");
+        }
+        String candidateName = applications.stream()
                 .filter(app -> String.valueOf(app.get("candidateId")).equals(String.valueOf(candidateId)))
                 .map(app -> String.valueOf(app.get("candidateName")))
                 .findFirst()
                 .orElse("Candidate");
-        String jobTitle = JOBS.stream()
+        String jobTitle = jobs.stream()
                 .filter(job -> String.valueOf(job.get("id")).equals(String.valueOf(jobId)))
                 .map(job -> String.valueOf(job.get("title")))
                 .findFirst()
                 .orElse("Open Role");
 
-        long nextId = INTERVIEWS.stream().mapToLong(item -> Long.parseLong(String.valueOf(item.get("id")))).max().orElse(1000L) + 1L;
-        interview.put("id", nextId);
         interview.put("candidateId", candidateId);
         interview.put("candidate", candidateName);
         interview.put("jobId", jobId);
@@ -321,21 +468,60 @@ public class ApplicationController {
         interview.put("mode", payload.getOrDefault("mode", "Video Call"));
         interview.put("status", "scheduled");
         interview.put("interviewer", "Hiring Team");
-        INTERVIEWS.add(interview);
-        return interview;
+        interview.put("candidateEmail", applications.stream()
+            .filter(application -> String.valueOf(application.get("candidateId")).equals(String.valueOf(candidateId)))
+            .map(application -> String.valueOf(application.get("candidateEmail"))).findFirst().orElse(""));
+        interview.put("recruiterEmail", recruiterEmail);
+        return documentStore.create("interviews", interview);
     }
 
     @GetMapping("/admin/company")
-    public Map<String, Object> recruiterCompany() {
-        return COMPANY;
+    public Map<String, Object> recruiterCompany(
+            @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        return companyFor(recruiterEmail);
     }
 
     @PatchMapping("/admin/company")
-    public Map<String, Object> updateCompany(@RequestBody Map<String, String> request) {
-        if (request.containsKey("name")) COMPANY.put("name", request.get("name"));
-        if (request.containsKey("website")) COMPANY.put("website", request.get("website"));
-        if (request.containsKey("size")) COMPANY.put("size", request.get("size"));
-        if (request.containsKey("description")) COMPANY.put("description", request.get("description"));
-        return COMPANY;
+    public Map<String, Object> updateCompany(@RequestBody Map<String, String> request,
+                                             @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        Map<String, Object> company = companyFor(recruiterEmail);
+        if (request.containsKey("name")) company.put("name", request.get("name"));
+        if (request.containsKey("website")) company.put("website", request.get("website"));
+        if (request.containsKey("size")) company.put("size", request.get("size"));
+        if (request.containsKey("description")) company.put("description", request.get("description"));
+        return documentStore.save("company", recruiterEmail, company);
+    }
+
+    private void requireIdentity(String email) {
+        if (email == null || email.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated user identity is required");
+        }
+    }
+
+    private List<Map<String, Object>> applicationsForRecruiter(String recruiterEmail) {
+        return documentStore.findAll("applications").stream()
+                .filter(application -> recruiterEmail.equalsIgnoreCase(String.valueOf(application.get("recruiterEmail"))))
+                .toList();
+    }
+
+    private List<Map<String, Object>> interviewsForRecruiter(String recruiterEmail) {
+        return documentStore.findAll("interviews").stream()
+                .filter(interview -> recruiterEmail.equalsIgnoreCase(String.valueOf(interview.get("recruiterEmail"))))
+                .toList();
+    }
+
+    private List<Map<String, Object>> jobsForRecruiter(String recruiterEmail) {
+        return documentStore.findAll("jobs").stream()
+                .filter(job -> recruiterEmail.equalsIgnoreCase(String.valueOf(job.get("recruiterEmail"))))
+                .toList();
+    }
+
+    private Map<String, Object> companyFor(String recruiterEmail) {
+        Map<String, Object> company = documentStore.find("company", recruiterEmail);
+        if (company != null) return company;
+        Map<String, Object> defaults = new LinkedHashMap<>(COMPANY);
+        return documentStore.save("company", recruiterEmail, defaults);
     }
 }

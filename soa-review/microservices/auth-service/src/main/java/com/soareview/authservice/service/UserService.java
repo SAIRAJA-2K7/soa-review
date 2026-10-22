@@ -11,7 +11,6 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 
 @Service
 public class UserService {
@@ -28,7 +27,7 @@ public class UserService {
     public AppUser registerUser(String name, String email, String password, String role) {
         String cleanEmail = (email == null ? "" : email).trim().toLowerCase(Locale.ROOT);
         String cleanName = (name == null ? "" : name).trim();
-        String normalizedRole = normalizeRole(role);
+        String registrationRole = normalizeRegistrationRole(role);
 
         if (cleanEmail.isBlank() || cleanName.isBlank() || password == null || password.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name, email and password are required");
@@ -42,7 +41,8 @@ public class UserService {
         user.setName(cleanName);
         user.setEmail(cleanEmail);
         user.setPassword(passwordEncoder.encode(password));
-        user.setRole(normalizedRole);
+        user.setRole(registrationRole);
+        user.setRequestedRole(null);
         user.setVerified(false);
         user.setActive(true);
         user.setOnboarded(false);
@@ -61,70 +61,31 @@ public class UserService {
     }
 
     @Transactional
-    public void ensureDemoUser() {
-        ensureDemoUsers();
+    public void ensureDemoUsers(String candidateEmail, String candidatePassword,
+                                String recruiterEmail, String recruiterPassword) {
+        createDemoUserIfMissing(candidateEmail, candidatePassword, "USER");
+        createDemoUserIfMissing(recruiterEmail, recruiterPassword, "RECRUITER");
     }
 
-    @Transactional
-    public void ensureDemoUsers() {
-        createDemoUserIfMissing("candidate@demo.com", "TalentSync User", "USER", "Product Designer", "Remote",
-                "Building the future of hiring.", "demo-password");
-        createDemoUserIfMissing("recruiter@demo.com", "Sarah Chen", "ADMIN", "Talent Acquisition Lead", "New York, NY",
-                "Scaling high-impact hiring programs.", "password123");
-    }
-
-    private void createDemoUserIfMissing(String email, String name, String role, String title, String location, String bio, String password) {
-        Optional<AppUser> existing = userRepository.findByEmail(email);
-        if (existing.isPresent()) {
-            AppUser user = existing.get();
-            boolean needsRefresh = false;
-
-            if (!role.equals(user.getRole())) {
-                user.setRole(role);
-                needsRefresh = true;
-            }
-            if (!password.equals(user.getPassword()) && !passwordEncoder.matches(password, user.getPassword())) {
-                user.setPassword(passwordEncoder.encode(password));
-                needsRefresh = true;
-            }
-            if (user.getProfessionalTitle() == null || !user.getProfessionalTitle().equals(title)) {
-                user.setProfessionalTitle(title);
-                needsRefresh = true;
-            }
-            if (user.getLocation() == null || !user.getLocation().equals(location)) {
-                user.setLocation(location);
-                needsRefresh = true;
-            }
-            if (user.getBio() == null || !user.getBio().equals(bio)) {
-                user.setBio(bio);
-                needsRefresh = true;
-            }
-            if (!user.isVerified()) {
-                user.setVerified(true);
-                needsRefresh = true;
-            }
-            if (!user.isActive()) {
-                user.setActive(true);
-                needsRefresh = true;
-            }
-
-            if (needsRefresh) {
-                userRepository.save(user);
-            }
+    private void createDemoUserIfMissing(String email, String password, String role) {
+        if ((email == null || email.isBlank()) && (password == null || password.isBlank())) {
             return;
         }
+        if (email == null || email.isBlank() || password == null || password.isBlank()) {
+            throw new IllegalStateException("Both demo account email and password must be configured.");
+        }
+        String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
+        if (userRepository.existsByEmail(normalizedEmail)) return;
 
         AppUser user = new AppUser();
-        user.setName(name);
-        user.setEmail(email);
+        user.setName("TalentSync Demo " + role);
+        user.setEmail(normalizedEmail);
         user.setPassword(passwordEncoder.encode(password));
         user.setRole(role);
+        user.setRequestedRole(null);
         user.setVerified(true);
         user.setActive(true);
         user.setOnboarded(false);
-        user.setProfessionalTitle(title);
-        user.setLocation(location);
-        user.setBio(bio);
         userRepository.save(user);
     }
 
@@ -161,9 +122,10 @@ public class UserService {
         return false;
     }
 
-    public String normalizeRole(String role) {
-        String normalized = role == null ? "USER" : role.trim().toUpperCase(Locale.ROOT);
-        return "ADMIN".equals(normalized) ? "ADMIN" : "USER";
+    private String normalizeRegistrationRole(String role) {
+        if (role == null) return "USER";
+        String normalized = role.trim().toUpperCase(Locale.ROOT);
+        return "RECRUITER".equals(normalized) ? "RECRUITER" : "USER";
     }
 
     public Map<String, Object> toProfileMap(AppUser user) {
@@ -172,6 +134,7 @@ public class UserService {
                 "name", user.getName(),
                 "email", user.getEmail(),
                 "role", user.getRole(),
+                "requestedRole", user.getRequestedRole() == null ? "" : user.getRequestedRole(),
                 "verified", user.isVerified(),
                 "onboarded", user.isOnboarded(),
                 "professionalTitle", user.getProfessionalTitle() == null ? "" : user.getProfessionalTitle(),

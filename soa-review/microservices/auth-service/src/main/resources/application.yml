@@ -7,7 +7,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/talentsync}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -31,7 +31,7 @@ spring:
             trust: ${MAIL_SMTP_SSL_TRUST:smtp.gmail.com}
 
 jwt:
-  secret: ${JWT_SECRET:talent-sync-jwt-secret-key-change-me-2026-long-enough-for-hs256}
+  secret: ${JWT_SECRET}
   expiration-ms: 86400000
 
 mail:

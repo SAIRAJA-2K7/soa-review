@@ -28,6 +28,9 @@ public class AppUser {
     @Column(name = "role", nullable = false)
     private String role;
 
+    @Column(name = "requested_role")
+    private String requestedRole;
+
     @Column(name = "verified", nullable = false)
     private boolean verified;
 
@@ -90,6 +93,14 @@ public class AppUser {
 
     public void setRole(String role) {
         this.role = role;
+    }
+
+    public String getRequestedRole() {
+        return requestedRole;
+    }
+
+    public void setRequestedRole(String requestedRole) {
+        this.requestedRole = requestedRole;
     }
 
     public boolean isVerified() {

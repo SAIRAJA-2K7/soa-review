@@ -1,0 +1,22 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:job_service_test;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+
+eureka:
+  client:
+    enabled: false
+
+application-service:
+  url: http://localhost:8084
+
+jwt:
+  secret: test-jwt-secret-key-for-service-tests-2026
+
+job-sync:
+  secret: test-job-sync-secret-for-service-tests-2026

@@ -2,7 +2,7 @@ const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replac
 
 export function toBackendRole(role) {
   const normalizedRole = String(role || 'candidate').trim().toLowerCase();
-  return normalizedRole === 'recruiter' || normalizedRole === 'admin' ? 'ADMIN' : 'USER';
+  return normalizedRole === 'recruiter' ? 'RECRUITER' : 'USER';
 }
 
 export async function callApi(path, options = {}) {
@@ -34,7 +34,8 @@ export function normalizeUser(response) {
     id: response.id || response.email,
     name: response.name || response.email,
     email: response.email,
-    role: backendRole === 'ADMIN' || backendRole === 'RECRUITER' ? 'recruiter' : 'candidate',
+    role: backendRole === 'ADMIN' ? 'admin' : backendRole === 'RECRUITER' ? 'recruiter' : 'candidate',
+    requestedRole: response?.requestedRole || null,
     verified: typeof response.verified === 'boolean' ? response.verified : false,
     onboarded: typeof response.onboarded === 'boolean' ? response.onboarded : false,
   };
