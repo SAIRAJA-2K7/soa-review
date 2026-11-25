@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: auth-service
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/talentsync}
     username: ${DB_USERNAME:postgres}

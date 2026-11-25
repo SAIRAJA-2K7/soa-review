@@ -15,6 +15,7 @@ const NAV_ITEMS = [
 ];
 export default function DashboardLayout({ children }) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [notificationsOpen, setNotificationsOpen] = useState(false);
     const { user, logout } = useAuth();
     const location = useLocation();
     const navigate = useNavigate();

@@ -48,6 +48,23 @@ public class ApplicationDocumentStore {
     }
 
     @Transactional
+    public void delete(String collection, String key) {
+        repository.findByCollectionNameAndRecordKey(collection, key).ifPresent(repository::delete);
+    }
+
+    @Transactional
+    public void deleteInterview(String interviewKey, String applicationKey, Map<String, Object> application) {
+        if (application != null) {
+            ApplicationDocument applicationDocument = repository
+                    .findByCollectionNameAndRecordKey("applications", applicationKey)
+                    .orElseThrow(() -> new IllegalStateException("Application disappeared while cancelling interview"));
+            applicationDocument.setPayload(encode(application));
+            repository.save(applicationDocument);
+        }
+        repository.findByCollectionNameAndRecordKey("interviews", interviewKey).ifPresent(repository::delete);
+    }
+
+    @Transactional
     public Map<String, Object> create(String collection, Map<String, Object> value) {
         ApplicationDocument document = repository.saveAndFlush(
                 new ApplicationDocument(collection, UUID.randomUUID().toString(), encode(value)));

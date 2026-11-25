@@ -7,11 +7,16 @@ export function toBackendRole(role) {
 
 export async function callApi(path, options = {}) {
   const token = sessionStorage.getItem('ts-token');
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = {
-    'Content-Type': 'application/json',
+    ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
+  if (isFormData) {
+    delete headers['Content-Type'];
+    delete headers['content-type'];
+  }
   const response = await fetch(`${API_URL}${path.startsWith('/') ? path : `/${path}`}`, { ...options, headers });
   if (!response.ok) {
     const body = await response.text();

@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -139,4 +140,38 @@ class ApplicationPersistenceIntegrationTest {
                                 Map.of("title", "Synced role"), "recruiter@example.com", "test-job-sync-secret-for-service-tests-2026");
                 assertThat(synced).containsEntry("id", 88L).containsEntry("recruiterEmail", "recruiter@example.com");
         }
+
+    @Test
+    void cancellingInterviewRestoresShortlistedApplicationState() {
+        String recruiterEmail = "interview-recruiter-" + UUID.randomUUID() + "@example.com";
+        long jobId = documentStore.nextId("jobs") + 10;
+        long candidateId = 99001L;
+        long applicationId = documentStore.nextId("applications") + 10;
+        documentStore.save("jobs", String.valueOf(jobId), Map.of(
+                "id", jobId, "title", "Interview Role", "recruiterEmail", recruiterEmail));
+        documentStore.save("applications", String.valueOf(applicationId), new java.util.LinkedHashMap<>(Map.of(
+                "id", applicationId,
+                "candidateId", candidateId,
+                "candidateName", "Interview Candidate",
+                "candidateEmail", "interview-candidate@example.com",
+                "jobId", jobId,
+                "jobTitle", "Interview Role",
+                "recruiterEmail", recruiterEmail,
+                "status", "shortlisted",
+                "timeline", java.util.List.of())));
+
+        Map<String, Object> created = applicationController.createInterview(Map.of(
+                "candidateId", candidateId,
+                "jobId", jobId,
+                "scheduledAt", LocalDateTime.now().plusDays(2).withNano(0).toString()), recruiterEmail);
+        long interviewId = ((Number) created.get("id")).longValue();
+        assertThat(documentStore.find("applications", String.valueOf(applicationId)))
+                .containsEntry("status", "interview");
+
+        assertThat(applicationController.cancelInterview(interviewId, recruiterEmail))
+                .containsEntry("status", "cancelled");
+        assertThat(documentStore.find("applications", String.valueOf(applicationId)))
+                .containsEntry("status", "shortlisted");
+        assertThat(documentStore.find("interviews", String.valueOf(interviewId))).isNull();
+    }
 }

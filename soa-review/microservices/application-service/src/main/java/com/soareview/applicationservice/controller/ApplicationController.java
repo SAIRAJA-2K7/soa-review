@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.StringUtils;
 import org.springframework.dao.DataIntegrityViolationException;
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.client.RestClientException;
@@ -20,11 +22,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 
 @RestController
 @RequestMapping("/api")
 public class ApplicationController {
 
+    private static final Logger logger = LoggerFactory.getLogger(ApplicationController.class);
     private static final List<Map<String, Object>> APPLICATIONS = new ArrayList<>();
     private static final List<Map<String, Object>> JOBS = new ArrayList<>();
     private static final List<Map<String, Object>> INTERVIEWS = new ArrayList<>();
@@ -234,6 +240,20 @@ public class ApplicationController {
         return documentStore.save("jobs", String.valueOf(id), persisted);
     }
 
+    @DeleteMapping("/internal/jobs/{id}")
+    public Map<String, String> deleteSyncedJob(@PathVariable Long id,
+                                                @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail,
+                                                @RequestHeader(value = "X-Service-Token", required = false) String serviceToken) {
+        requireIdentity(recruiterEmail);
+        if (!StringUtils.hasText(serviceToken) || !java.security.MessageDigest.isEqual(
+                jobSyncSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                serviceToken.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Service authentication required");
+        }
+        documentStore.delete("jobs", String.valueOf(id));
+        return Map.of("status", "deleted");
+    }
+
     @GetMapping("/applications")
     public List<Map<String, Object>> getApplications(
             @RequestHeader(value = "X-User-Email", required = false) String candidateEmail) {
@@ -252,6 +272,20 @@ public class ApplicationController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Application not found");
         }
         return application;
+    }
+
+    @DeleteMapping("/applications/{id}")
+    public Map<String, String> withdrawApplication(@PathVariable Long id,
+                                                    @RequestHeader(value = "X-User-Email", required = false) String candidateEmail) {
+        requireIdentity(candidateEmail);
+        Map<String, Object> application = documentStore.find("applications", String.valueOf(id));
+        if (application == null || !candidateEmail.equalsIgnoreCase(String.valueOf(application.get("candidateEmail")))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Application not found");
+        }
+        documentStore.delete("applications", String.valueOf(id));
+        documentStore.delete("application-reservations",
+                candidateEmail + ":" + String.valueOf(application.get("jobId")));
+        return Map.of("status", "withdrawn");
     }
 
     @PostMapping("/applications")
@@ -359,6 +393,9 @@ public class ApplicationController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot update another recruiter's application");
         }
         application.put("status", status);
+        if ("selected".equals(status) || "rejected".equals(status)) {
+            application.put("decisionDate", LocalDate.now().toString());
+        }
         List<Map<String, Object>> timeline = new ArrayList<>();
         Object currentTimeline = application.get("timeline");
         if (currentTimeline instanceof List<?> items) {
@@ -382,6 +419,65 @@ public class ApplicationController {
         dashboard.put("totalApplicants", applications.size());
         dashboard.put("shortlisted", (int) applications.stream().filter(app -> "shortlisted".equalsIgnoreCase(String.valueOf(app.get("status")))).count());
         dashboard.put("interviews", interviews.size());
+        dashboard.put("underReview", countApplications(applications, "under_review"));
+        dashboard.put("interviewStage", countApplications(applications, "interview"));
+        dashboard.put("selected", countApplications(applications, "selected"));
+        dashboard.put("rejected", countApplications(applications, "rejected"));
+        dashboard.put("totalJobs", jobs.size());
+        dashboard.put("closedJobs", jobs.stream().filter(job -> Boolean.FALSE.equals(job.get("published"))).count());
+        dashboard.put("selectionRate", percentage(countApplications(applications, "selected"), applications.size()));
+        dashboard.put("interviewConversionRate", percentage(
+                countApplications(applications, "interview") + countApplications(applications, "selected"),
+                applications.size()));
+        dashboard.put("averageHiringDurationDays", averageHiringDurationDays(applications));
+
+        Map<String, Integer> stageCounts = new LinkedHashMap<>();
+        for (String stage : List.of("under_review", "shortlisted", "interview", "selected", "rejected")) {
+            stageCounts.put(stage, countApplications(applications, stage));
+        }
+        dashboard.put("stageCounts", stageCounts);
+
+        List<Map<String, Object>> funnel = new ArrayList<>();
+        for (String stage : List.of("under_review", "shortlisted", "interview", "selected")) {
+            funnel.add(mapOf("stage", stage.replace('_', ' '),
+                    "count", countApplications(applications, stage)));
+        }
+        dashboard.put("conversionFunnel", funnel);
+
+        Map<String, Integer> applicationsByLocation = new LinkedHashMap<>();
+        applications.forEach(application -> {
+            String location = String.valueOf(application.getOrDefault("candidateLocation", "Unknown"));
+            applicationsByLocation.merge(location, 1, Integer::sum);
+        });
+        dashboard.put("applicationsByLocation", applicationsByLocation);
+
+        Map<String, Integer> applicationsOverTime = new LinkedHashMap<>();
+        applications.forEach(application -> {
+            String date = String.valueOf(application.getOrDefault("appliedDate", "Unknown"));
+            applicationsOverTime.merge(date, 1, Integer::sum);
+        });
+        dashboard.put("applicationsOverTime", applicationsOverTime);
+
+        Map<String, Integer> interviewTrend = new LinkedHashMap<>();
+        interviews.forEach(interview -> {
+            String date = String.valueOf(interview.getOrDefault("date", "Unknown"));
+            if (date.contains("T")) date = date.substring(0, date.indexOf('T'));
+            interviewTrend.merge(date, 1, Integer::sum);
+        });
+        dashboard.put("interviewTrend", interviewTrend);
+
+        Map<String, Integer> decisionDistribution = new LinkedHashMap<>();
+        decisionDistribution.put("selected", countApplications(applications, "selected"));
+        decisionDistribution.put("rejected", countApplications(applications, "rejected"));
+        dashboard.put("decisionDistribution", decisionDistribution);
+
+        Map<String, Integer> applicationsByJob = new LinkedHashMap<>();
+        applications.forEach(application -> {
+            String title = String.valueOf(application.getOrDefault("jobTitle", "Unknown"));
+            applicationsByJob.merge(title, 1, Integer::sum);
+        });
+        dashboard.put("applicationsByJob", applicationsByJob);
+
         dashboard.put("jobs", jobs);
         dashboard.put("applications", applications);
         dashboard.put("scheduledInterviews", interviews);
@@ -434,9 +530,23 @@ public class ApplicationController {
     public Map<String, Object> createInterview(@RequestBody Map<String, Object> payload,
                                                 @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
         requireIdentity(recruiterEmail);
+        if (payload.get("candidateId") == null || payload.get("jobId") == null || payload.get("scheduledAt") == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Candidate, job, and interview time are required");
+        }
+        Long candidateId;
+        Long jobId;
+        LocalDateTime scheduledAt;
+        try {
+            candidateId = Long.valueOf(String.valueOf(payload.get("candidateId")));
+            jobId = Long.valueOf(String.valueOf(payload.get("jobId")));
+            scheduledAt = LocalDateTime.parse(String.valueOf(payload.get("scheduledAt")));
+        } catch (NumberFormatException | DateTimeParseException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Candidate, job, or interview time is invalid", exception);
+        }
+        if (!scheduledAt.isAfter(LocalDateTime.now())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Interview time must be in the future");
+        }
         Map<String, Object> interview = new LinkedHashMap<>();
-        Long candidateId = Long.valueOf(String.valueOf(payload.getOrDefault("candidateId", 101)));
-        Long jobId = Long.valueOf(String.valueOf(payload.getOrDefault("jobId", 1)));
         List<Map<String, Object>> applications = applicationsForRecruiter(recruiterEmail);
         List<Map<String, Object>> jobs = jobsForRecruiter(recruiterEmail);
         boolean candidateApplied = applications.stream().anyMatch(application ->
@@ -444,6 +554,13 @@ public class ApplicationController {
             String.valueOf(application.get("jobId")).equals(String.valueOf(jobId)));
         if (!candidateApplied) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Candidate must have an application for this job");
+        }
+        boolean candidateShortlisted = applications.stream().anyMatch(application ->
+            String.valueOf(application.get("candidateId")).equals(String.valueOf(candidateId)) &&
+            String.valueOf(application.get("jobId")).equals(String.valueOf(jobId)) &&
+            "shortlisted".equalsIgnoreCase(String.valueOf(application.get("status"))));
+        if (!candidateShortlisted) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Shortlist the candidate before scheduling an interview");
         }
         String candidateName = applications.stream()
                 .filter(app -> String.valueOf(app.get("candidateId")).equals(String.valueOf(candidateId)))
@@ -460,10 +577,8 @@ public class ApplicationController {
         interview.put("candidate", candidateName);
         interview.put("jobId", jobId);
         interview.put("job", jobTitle);
-        interview.put("date", String.valueOf(payload.getOrDefault("scheduledAt", "2026-09-30T10:00")));
-        interview.put("time", String.valueOf(payload.getOrDefault("scheduledAt", "2026-09-30T10:00")).contains("T")
-                ? String.valueOf(payload.getOrDefault("scheduledAt", "2026-09-30T10:00")).split("T")[1]
-                : "10:00:00");
+        interview.put("date", scheduledAt.toLocalDate().toString());
+        interview.put("time", scheduledAt.toLocalTime().toString());
         interview.put("type", payload.getOrDefault("type", "Technical"));
         interview.put("mode", payload.getOrDefault("mode", "Video Call"));
         interview.put("status", "scheduled");
@@ -472,7 +587,93 @@ public class ApplicationController {
             .filter(application -> String.valueOf(application.get("candidateId")).equals(String.valueOf(candidateId)))
             .map(application -> String.valueOf(application.get("candidateEmail"))).findFirst().orElse(""));
         interview.put("recruiterEmail", recruiterEmail);
-        return documentStore.create("interviews", interview);
+        Map<String, Object> created = documentStore.create("interviews", interview);
+        applications.stream()
+                .filter(application -> String.valueOf(application.get("candidateId")).equals(String.valueOf(candidateId))
+                        && String.valueOf(application.get("jobId")).equals(String.valueOf(jobId)))
+                .findFirst()
+                .ifPresent(application -> {
+                    application.put("status", "interview");
+                    List<Map<String, Object>> timeline = new ArrayList<>();
+                    Object currentTimeline = application.get("timeline");
+                    if (currentTimeline instanceof List<?> items) {
+                        items.stream().filter(Map.class::isInstance)
+                                .map(item -> (Map<String, Object>) item).forEach(timeline::add);
+                    }
+                    timeline.add(mapOf("stage", "Interview scheduled", "date", LocalDate.now().toString(),
+                            "completed", true, "note", "Interview set for " + scheduledAt));
+                    application.put("timeline", timeline);
+                    documentStore.save("applications", String.valueOf(application.get("id")), application);
+                });
+        return created;
+    }
+
+    @PatchMapping("/admin/interviews/{id}")
+    public Map<String, Object> updateInterview(@PathVariable Long id,
+                                                @RequestBody Map<String, Object> payload,
+                                                @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        Map<String, Object> interview = documentStore.find("interviews", String.valueOf(id));
+        if (interview == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Interview not found");
+        }
+        if (!recruiterEmail.equalsIgnoreCase(String.valueOf(interview.get("recruiterEmail")))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot update another recruiter's interview");
+        }
+        if (payload.containsKey("scheduledAt")) {
+            String scheduledAt = String.valueOf(payload.get("scheduledAt")).trim();
+            if (scheduledAt.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "scheduledAt is required");
+            }
+            try {
+                LocalDateTime parsed = LocalDateTime.parse(scheduledAt);
+                if (!parsed.isAfter(LocalDateTime.now())) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Interview time must be in the future");
+                }
+                interview.put("date", parsed.toLocalDate().toString());
+                interview.put("time", parsed.toLocalTime().toString());
+            } catch (DateTimeParseException exception) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "scheduledAt must be an ISO local date-time", exception);
+            }
+        }
+        if (payload.containsKey("type")) interview.put("type", String.valueOf(payload.get("type")));
+        if (payload.containsKey("mode")) interview.put("mode", String.valueOf(payload.get("mode")));
+        if (payload.containsKey("status")) interview.put("status", String.valueOf(payload.get("status")));
+        return documentStore.save("interviews", String.valueOf(id), interview);
+    }
+
+    @DeleteMapping("/admin/interviews/{id}")
+    public Map<String, String> cancelInterview(@PathVariable Long id,
+                                                @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail) {
+        requireIdentity(recruiterEmail);
+        Map<String, Object> interview = documentStore.find("interviews", String.valueOf(id));
+        if (interview == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Interview not found");
+        }
+        if (!recruiterEmail.equalsIgnoreCase(String.valueOf(interview.get("recruiterEmail")))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot cancel another recruiter's interview");
+        }
+        Map<String, Object> application = applicationsForRecruiter(recruiterEmail).stream()
+                .filter(item -> String.valueOf(item.get("candidateId")).equals(String.valueOf(interview.get("candidateId")))
+                        && String.valueOf(item.get("jobId")).equals(String.valueOf(interview.get("jobId")))
+                        && "interview".equalsIgnoreCase(String.valueOf(item.get("status"))))
+                .findFirst()
+                .orElse(null);
+        if (application != null) {
+            application.put("status", "shortlisted");
+            List<Map<String, Object>> timeline = new ArrayList<>();
+            Object currentTimeline = application.get("timeline");
+            if (currentTimeline instanceof List<?> items) {
+                items.stream().filter(Map.class::isInstance)
+                        .map(item -> (Map<String, Object>) item).forEach(timeline::add);
+            }
+            timeline.add(mapOf("stage", "Interview cancelled", "date", LocalDate.now().toString(),
+                    "completed", true, "note", "Candidate returned to the shortlist"));
+            application.put("timeline", timeline);
+        }
+        documentStore.deleteInterview(String.valueOf(id),
+                application == null ? null : String.valueOf(application.get("id")), application);
+        return Map.of("status", "cancelled");
     }
 
     @GetMapping("/admin/company")
@@ -492,6 +693,38 @@ public class ApplicationController {
         if (request.containsKey("size")) company.put("size", request.get("size"));
         if (request.containsKey("description")) company.put("description", request.get("description"));
         return documentStore.save("company", recruiterEmail, company);
+    }
+
+    private int countApplications(List<Map<String, Object>> applications, String status) {
+        return (int) applications.stream()
+                .filter(application -> status.equalsIgnoreCase(String.valueOf(application.get("status"))))
+                .count();
+    }
+
+    private double percentage(int numerator, int denominator) {
+        return denominator == 0 ? 0.0 : Math.round(numerator * 1000.0 / denominator) / 10.0;
+    }
+
+    private double averageHiringDurationDays(List<Map<String, Object>> applications) {
+        List<Long> durations = applications.stream()
+                .filter(application -> "selected".equalsIgnoreCase(String.valueOf(application.get("status"))))
+                .map(application -> {
+                    try {
+                        LocalDate applied = LocalDate.parse(String.valueOf(application.get("appliedDate")));
+                        LocalDate decided = LocalDate.parse(String.valueOf(
+                                application.getOrDefault("decisionDate", LocalDate.now().toString())));
+                        return ChronoUnit.DAYS.between(applied, decided);
+                    } catch (DateTimeParseException exception) {
+                        logger.warn("Skipping hiring-duration metric for application {} due to invalid dates",
+                                application.get("id"), exception);
+                        return null;
+                    }
+                })
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        if (durations.isEmpty()) return 0.0;
+        double average = durations.stream().mapToLong(Long::longValue).average().orElse(0.0);
+        return Math.round(average * 10.0) / 10.0;
     }
 
     private void requireIdentity(String email) {

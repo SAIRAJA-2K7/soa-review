@@ -4,10 +4,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClientException;
 import jakarta.annotation.PostConstruct;
 import com.soareview.jobservice.persistence.JobDocumentStore;
 
@@ -117,6 +119,64 @@ public class JobController {
             throw exception;
         }
         return saved;
+    }
+
+    @PatchMapping("/jobs/{id}/published")
+    public Map<String, Object> setJobPublished(@PathVariable Long id,
+                                               @RequestBody Map<String, Object> payload,
+                                               @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail,
+                                               @RequestHeader(value = "X-User-Role", required = false) String recruiterRole,
+                                               @RequestHeader(value = "Authorization", required = false) String authorization) {
+        requireRole(recruiterRole, "RECRUITER");
+        requireIdentity(recruiterEmail);
+        Map<String, Object> existing = documentStore.find("jobs", String.valueOf(id));
+        if (existing == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found");
+        }
+        if (!recruiterEmail.equals(existing.get("recruiterEmail"))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot change another recruiter's job");
+        }
+        if (!payload.containsKey("published") || !(payload.get("published") instanceof Boolean published)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "published must be true or false");
+        }
+        existing.put("published", published);
+        Map<String, Object> saved = documentStore.save("jobs", String.valueOf(id), existing);
+        try {
+            synchronizeJob(saved, authorization);
+        } catch (RuntimeException exception) {
+            existing.put("published", !published);
+            documentStore.save("jobs", String.valueOf(id), existing);
+            throw exception;
+        }
+        return saved;
+    }
+
+    @DeleteMapping("/jobs/{id}")
+    public Map<String, String> deleteJob(@PathVariable Long id,
+                                         @RequestHeader(value = "X-User-Email", required = false) String recruiterEmail,
+                                         @RequestHeader(value = "X-User-Role", required = false) String recruiterRole,
+                                         @RequestHeader(value = "Authorization", required = false) String authorization) {
+        requireRole(recruiterRole, "RECRUITER");
+        requireIdentity(recruiterEmail);
+        Map<String, Object> existing = documentStore.find("jobs", String.valueOf(id));
+        if (existing == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Job not found");
+        }
+        if (!recruiterEmail.equals(existing.get("recruiterEmail"))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You cannot delete another recruiter's job");
+        }
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set(HttpHeaders.AUTHORIZATION, authorization);
+            headers.set("X-Service-Token", jobSyncSecret);
+            restTemplate.exchange(applicationServiceUrl + "/api/internal/jobs/" + id,
+                    HttpMethod.DELETE, new HttpEntity<>(headers), Void.class);
+        } catch (RestClientException exception) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Application-service could not synchronize the job deletion; no local deletion was committed", exception);
+        }
+        documentStore.delete("jobs", String.valueOf(id));
+        return Map.of("status", "deleted");
     }
 
     @PostMapping("/jobs/{id}/apply")
