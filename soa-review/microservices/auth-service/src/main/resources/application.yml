@@ -47,8 +47,9 @@ mail:
 
 eureka:
   client:
-    register-with-eureka: true
-    fetch-registry: true
+    enabled: ${EUREKA_ENABLED:true}
+    register-with-eureka: ${EUREKA_ENABLED:true}
+    fetch-registry: ${EUREKA_ENABLED:true}
     service-url:
       defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
   instance:

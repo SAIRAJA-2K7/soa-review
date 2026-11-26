@@ -28,6 +28,14 @@ Set your local database password and both private service secrets in `.env` befo
 mvn clean package
 ```
 
+## Railway deployment
+
+The cloud stack uses five Railway services: PostgreSQL, gateway, auth-service, job-service, and application-service. Eureka remains enabled for local development; set `EUREKA_ENABLED=false` in Railway and route services over Railway's private network. Configure each Java service's Dockerfile path with `RAILWAY_DOCKERFILE_PATH` (`gateway/Dockerfile`, `auth-service/Dockerfile`, `job-service/Dockerfile`, or `application-service/Dockerfile`) and use this folder as its build root. The Eureka Dockerfile is only needed when deploying a separate discovery service.
+
+Set `PORT` to `8080`, `8081`, `8083`, or `8084` for the corresponding service. Set `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` on all three data services using Railway's PostgreSQL private connection variables. Use the same private `JWT_SECRET` on the gateway and all downstream services, and the same separate `JOB_SYNC_SECRET` on job-service and application-service. Configure private service URLs with `AUTH_SERVICE_URI`, `JOB_SERVICE_URI`, `APPLICATION_SERVICE_URI`, `APPLICATION_SERVICE_URL`, and `AUTH_SERVICE_URL`. Set `CORS_ALLOWED_ORIGINS` on the gateway to the exact Vercel origin. `MAIL_USERNAME` and `MAIL_PASSWORD` are required for live OTP and password-reset email delivery.
+
+For Vercel, set `VITE_API_URL` to the public Railway gateway URL before building the frontend. The frontend must use the gateway URL rather than `localhost`.
+
 ### Optional local demo accounts
 
 Demo accounts are disabled by default. To create local candidate or recruiter demo accounts, use a disposable development database and set these values in the ignored `microservices/.env` file:

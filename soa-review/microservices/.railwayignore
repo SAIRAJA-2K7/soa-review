@@ -1,0 +1,5 @@
+**/target
+**/bin
+**/live-logs
+**/startup-logs
+**/.settings

@@ -8,27 +8,27 @@ spring:
     gateway:
       discovery:
         locator:
-          enabled: true
+          enabled: ${EUREKA_ENABLED:true}
           lower-case-service-id: true
       routes:
         - id: auth-service
-          uri: lb://AUTH-SERVICE
+          uri: ${AUTH_SERVICE_URI:lb://AUTH-SERVICE}
           predicates:
             - Path=/api/auth/**
         - id: user-profile
-          uri: lb://AUTH-SERVICE
+          uri: ${AUTH_SERVICE_URI:lb://AUTH-SERVICE}
           predicates:
             - Path=/api/user/profile,/api/user/profile/**
         - id: user-saved-jobs
-          uri: lb://JOB-SERVICE
+          uri: ${JOB_SERVICE_URI:lb://JOB-SERVICE}
           predicates:
             - Path=/api/user/saved-jobs,/api/user/saved-jobs/**
         - id: user-interviews
-          uri: lb://APPLICATION-SERVICE
+          uri: ${APPLICATION_SERVICE_URI:lb://APPLICATION-SERVICE}
           predicates:
             - Path=/api/user/interviews,/api/user/interviews/**
         - id: job-service
-          uri: lb://JOB-SERVICE
+          uri: ${JOB_SERVICE_URI:lb://JOB-SERVICE}
           predicates:
             - Path=/api/jobs/**
         - id: application-service
@@ -41,8 +41,9 @@ jwt:
   expiration-ms: 86400000
 eureka:
   client:
-    register-with-eureka: true
-    fetch-registry: true
+    enabled: ${EUREKA_ENABLED:true}
+    register-with-eureka: ${EUREKA_ENABLED:true}
+    fetch-registry: ${EUREKA_ENABLED:true}
     service-url:
       defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
   instance:

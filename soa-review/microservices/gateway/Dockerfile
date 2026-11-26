@@ -1,8 +1,7 @@
 FROM maven:3.9.11-eclipse-temurin-21 AS build
 WORKDIR /app
 COPY pom.xml pom.xml
-COPY gateway/pom.xml gateway/pom.xml
-COPY gateway/src gateway/src
+COPY . .
 RUN mvn -q -f pom.xml -pl gateway -am package -DskipTests
 
 FROM eclipse-temurin:21-jre

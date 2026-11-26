@@ -1,8 +1,7 @@
 FROM maven:3.9.11-eclipse-temurin-21 AS build
 WORKDIR /app
 COPY pom.xml pom.xml
-COPY application-service/pom.xml application-service/pom.xml
-COPY application-service/src application-service/src
+COPY . .
 RUN mvn -q -f pom.xml -pl application-service -am package -DskipTests
 
 FROM eclipse-temurin:21-jre

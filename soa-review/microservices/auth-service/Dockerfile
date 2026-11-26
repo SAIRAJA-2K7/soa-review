@@ -1,8 +1,7 @@
 FROM maven:3.9.11-eclipse-temurin-21 AS build
 WORKDIR /app
 COPY pom.xml pom.xml
-COPY auth-service/pom.xml auth-service/pom.xml
-COPY auth-service/src auth-service/src
+COPY . .
 RUN mvn -q -f pom.xml -pl auth-service -am package -DskipTests
 
 FROM eclipse-temurin:21-jre
