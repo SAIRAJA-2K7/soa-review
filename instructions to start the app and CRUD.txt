@@ -2,12 +2,15 @@
 sssbnr2007@gmail.com
 2400031695cse2@gmail.com
 
-CRUD OPERATIONS:
+DATABASE SAFETY:
 
-DELETE FROM users;
+Use the application/API for normal create, read, update, and delete operations.
+The SQL statements in this file are read-only inspection queries. Do not run
+unqualified DELETE or UPDATE statements against users or business tables.
+Run write tests only against a disposable database with no important data.
+The CRUD load-balancing verifier creates and deletes temporary job records.
 
-DELETE FROM users
-WHERE id = 6;
+CRUD OPERATIONS AND DATABASE INSPECTION:
 
 List application tables:
 SELECT table_schema, table_name
@@ -212,7 +215,7 @@ Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" |
     }
 
 
-Check that TalentSync ports are free:
+Check that the standard TalentSync ports are free:
 
 Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
     Where-Object { $_.LocalPort -in 8761,8080,8081,8083,8084 } |
@@ -221,13 +224,54 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
 
 TO START:
 
-Ensure PostgreSQL is running and your intended database is available.
+Prerequisites:
+- Java 21
+- PostgreSQL running, with the intended database already created and reachable
+- Node.js and npm
+- PowerShell
+
+For CRUD testing, use a disposable PostgreSQL database (for example,
+talentsync_test) and a database account with access only to that test database.
+Do not point these write tests at a shared or production database.
+
+Configure the local microservices environment once. From the microservices
+folder, copy the example only if you do not already have a local .env file:
+
+Set-Location 'C:\Users\mekas\Downloads\soa-review\soa-review\microservices'
+if (-not (Test-Path .env)) { Copy-Item env.example .env }
+notepad .env
+
+Set DB_URL to the disposable database, for example:
+jdbc:postgresql://localhost:5432/talentsync_test
+
+Fill in DB_USERNAME and DB_PASSWORD, and set separate private values for
+JWT_SECRET and JOB_SYNC_SECRET (each must be at least 32 characters). Configure
+MAIL_USERNAME and MAIL_PASSWORD if you need real email OTP or password-reset
+delivery. Do not commit .env or share passwords/JWTs.
+
+The frontend runs on port 8443 in this project. If testing password reset,
+set APP_PASSWORD_RESET_URL in microservices/.env to:
+http://localhost:8443/reset-password
+
+For an existing database, back it up before applying the recruiter role
+migration. The migration is not run automatically by the startup script:
+
+microservices\db\migrations\V1__allow_recruiter_user_role.sql
+
+Review that SQL file and apply it to the intended database using pgAdmin only
+when the existing users table needs the recruiter-role constraint update.
+Verify the constraint with the query in this file before testing recruiter
+registration.
 
 
 Start the microservices from PowerShell:
 Set-Location 'C:\Users\mekas\Downloads\soa-review\soa-review\microservices'
 .\start-microservices.ps1
 
+The launcher builds the services, checks that their required ports are free,
+then starts Eureka, auth, job, application, and gateway services in order. It
+starts one instance of each service. If startup fails, check logs in
+microservices\live-logs. Do not stop unknown processes just to free a port.
 
 Start the frontend in a separate VS Code terminal:
 
@@ -235,34 +279,136 @@ Set-Location 'C:\Users\mekas\Downloads\soa-review\soa-review'
 npm run dev
 
 
-Open the URL Vite prints in that terminal.
+Open http://localhost:8443. The Vite configuration uses port 8443 (not 5173).
+The frontend calls the gateway at http://localhost:8080 by default.
 
 Check the service health pages:
-Eureka: http://localhost:8761/actuator/health
+Eureka dashboard: http://localhost:8761
 Auth: http://localhost:8081/api/auth/health
 Job: http://localhost:8083/actuator/health
 Application: http://localhost:8084/actuator/health
 Gateway: http://localhost:8080/actuator/health
 
 
-Recruiter signup reminder: your database previously rejected RECRUITER because of its role constraint. Before trying recruiter signup, back up the intended database and apply:
+LIVE CRUD SMOKE TEST (DISPOSABLE DATABASE ONLY):
 
-BEGIN;
+1. Register and verify a recruiter account, then log in. Configure working SMTP
+   for email OTP, or use the documented opt-in dev/test demo-account setup on a
+   disposable database.
+2. As the recruiter, create a temporary job in the app. Confirm it appears in
+   the recruiter job list and public job listing.
+3. Edit the temporary job, save it, and confirm the changed values persist.
+   Publish/unpublish it and confirm its public visibility changes.
+4. As a candidate, find the job and submit an application. Confirm the
+   application appears in the candidate's application history and the
+   recruiter's applications/candidate views.
+5. As the recruiter, update the application stage and schedule or update an
+   interview. Confirm the candidate can see the resulting status/interview.
+6. Delete only the temporary job and confirm it is no longer returned. Existing
+   applications may be retained by design; do not expect deletion to erase
+   their history.
+7. Use the read-only SQL queries above to inspect stored results. Do not use
+   direct SQL DELETE statements for routine cleanup.
 
-ALTER TABLE public.users
-    DROP CONSTRAINT IF EXISTS users_role_check;
+POSTMAN ROUTES FOR JOB CRUD:
 
-ALTER TABLE public.users
-    ADD CONSTRAINT users_role_check
-    CHECK (role IN ('USER', 'RECRUITER', 'ADMIN'));
+Use the gateway URL http://localhost:8080 and a verified recruiter JWT:
+- GET /api/jobs and GET /api/jobs/{id}: browse/read jobs
+- POST /api/jobs: create a job
+- PUT /api/jobs/{id}: update a job
+- PATCH /api/jobs/{id}/published: publish/unpublish a job
+- DELETE /api/jobs/{id}: delete a test job
 
-COMMIT;
+In Postman, choose Authorization > Bearer Token and use the token returned by
+the verified recruiter's login request. Use the candidate's own token for
+candidate actions; do not use a recruiter token to submit an application.
+For application workflow, use a candidate JWT to submit with
+POST /api/jobs/{id}/apply. Use a recruiter JWT to review GET
+/api/admin/applications and update an application with
+PATCH /api/applications/{id}/status. Never include a real JWT in screenshots,
+committed files, or shared logs.
 
-verify:
+TWO-INSTANCE JOB CRUD AND LOAD-BALANCING CHECK:
+
+This optional verifier writes temporary records and requires a disposable
+database, a verified recruiter token, and two UP job-service instances in
+Eureka. It exercises create, read, update, publish/unpublish, delete,
+read-after-write, and application-service mirroring across both instances.
+
+1. Stop the ordinary stack if it is already running. In the PowerShell window
+   that will launch it, enable the local-only instance response header before
+   starting the stack:
+
+$env:LOAD_BALANCING_INSTANCE_HEADER_ENABLED = 'true'
+Set-Location 'C:\Users\mekas\Downloads\soa-review\soa-review\microservices'
+.\start-microservices.ps1
+
+2. In that same PowerShell window, start a second job-service instance on port
+   8085. First confirm that port 8085 is free:
+
+Get-NetTCPConnection -State Listen -LocalPort 8085 -ErrorAction SilentlyContinue
+
+If that command returns a listener, do not stop it unless you have confirmed it
+belongs to your own test run. Do not start the second instance on an occupied
+port.
+
+$java = Join-Path $env:JAVA_HOME 'bin\java.exe'
+$jobInstance2 = Start-Process -PassThru -FilePath $java -WorkingDirectory $PWD `
+    -ArgumentList '-jar', (Join-Path $PWD 'job-service\target\job-service-1.0.0.jar'), '--server.port=8085'
+
+Wait until Eureka at http://localhost:8761 shows two JOB-SERVICE instances UP.
+The local response header is for verification only; do not enable it in
+production.
+
+3. Sign in as a verified recruiter. Enter the JWT using the masked prompt below
+   (it is held only in this PowerShell process environment; do not print or
+   share it):
+
+$secureToken = Read-Host 'Paste verified recruiter JWT' -AsSecureString
+$tokenPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+try {
+    $env:TALENTSYNC_TEST_RECRUITER_TOKEN =
+        [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPointer)
+} finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer)
+    $secureToken.Dispose()
+}
+
+4. Run the verifier with explicit acknowledgement that it writes test data:
+
+.\verify-crud-load-balancing.ps1 -AllowLocalTestWrites `
+    -ExpectedInstanceCount 2 -JobCount 10
+
+Require a PASS result and confirm the output reports both job-service
+instances for each CRUD method. The script attempts cleanup if a test fails;
+inspect the disposable database if it reports cleanup warnings.
+
+5. Remove the token from the environment and stop only the second instance
+   started above:
+
+Remove-Item Env:TALENTSYNC_TEST_RECRUITER_TOKEN
+Stop-Process -Id $jobInstance2.Id
+
+This verifier covers job CRUD and job-service distribution; it does not by
+itself prove every application, interview, authentication, or PostgreSQL
+failure/recovery workflow. The regular Java tests use H2 unless the opt-in
+PostgreSQL integration tests are explicitly configured for a dedicated
+_test/_integration database.
+
+
+Recruiter signup reminder: for an existing database, back it up and review the
+repository migration at
+microservices\db\migrations\V1__allow_recruiter_user_role.sql before applying
+the role constraint update. The migration also promotes only pending rows
+explicitly marked requested_role='RECRUITER'. Do not apply database migrations
+to a shared/production database without approval and a recovery plan.
+
+After applying the reviewed migration, verify the constraint:
 SELECT conname, pg_get_constraintdef(oid)
 FROM pg_constraint
 WHERE conrelid = 'public.users'::regclass
   AND conname = 'users_role_check';
 
-
-if needed restart auth-service
+If you change database or service configuration, stop the TalentSync services
+using TO STOP above, then repeat TO START. The launcher starts the full stack;
+it does not independently restart only auth-service.
