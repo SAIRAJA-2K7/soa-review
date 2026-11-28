@@ -76,6 +76,21 @@ class ServiceJwtFilterTest {
     }
 
     @Test
+    void onlyCandidatesMaySubmitApplications() throws Exception {
+        MockHttpServletResponse recruiterResponse = new MockHttpServletResponse();
+        filter.doFilter(authenticatedRequest("POST", "/api/applications", "RECRUITER"),
+                recruiterResponse, mock(FilterChain.class));
+        assertThat(recruiterResponse.getStatus()).isEqualTo(HttpStatus.FORBIDDEN.value());
+
+        MockHttpServletResponse candidateResponse = new MockHttpServletResponse();
+        FilterChain candidateChain = mock(FilterChain.class);
+        filter.doFilter(authenticatedRequest("POST", "/api/applications", "USER"),
+                candidateResponse, candidateChain);
+        verify(candidateChain).doFilter(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        assertThat(candidateResponse.getStatus()).isEqualTo(HttpStatus.OK.value());
+    }
+
+    @Test
     void replacesUntrustedIdentityHeaders() throws Exception {
         MockHttpServletRequest request = authenticatedRequest("GET", "/api/admin/applications", "RECRUITER");
         request.addHeader("X-User-Email", "forged@example.com");

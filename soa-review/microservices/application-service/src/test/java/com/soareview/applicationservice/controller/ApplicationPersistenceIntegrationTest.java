@@ -70,6 +70,24 @@ class ApplicationPersistenceIntegrationTest {
     }
 
     @Test
+    void withdrawalRemovesApplicationAndReleasesDuplicateReservation() {
+        String candidateEmail = "withdraw-candidate@example.com";
+        stubCandidateProfile(candidateEmail, 901L, "Withdraw Candidate");
+        Map<String, Object> request = Map.of("candidateEmail", candidateEmail, "jobId", 1);
+        Map<String, Object> created = applicationController.createApplication(
+                request, candidateEmail, "Bearer test-token");
+        Long id = ((Number) created.get("id")).longValue();
+
+        assertThat(applicationController.withdrawApplication(id, candidateEmail))
+                .containsEntry("status", "withdrawn");
+        assertThat(documentStore.find("applications", String.valueOf(id))).isNull();
+
+        Map<String, Object> reapplied = applicationController.createApplication(
+                request, candidateEmail, "Bearer test-token");
+        assertThat(reapplied).containsEntry("candidateEmail", candidateEmail);
+    }
+
+    @Test
     void rejectsDuplicateApplicationsAndIgnoresForgedCandidateFields() {
         stubCandidateProfile("duplicate@example.com", 42L, "Canonical Candidate");
         Map<String, Object> request = Map.of(
@@ -173,5 +191,42 @@ class ApplicationPersistenceIntegrationTest {
         assertThat(documentStore.find("applications", String.valueOf(applicationId)))
                 .containsEntry("status", "shortlisted");
         assertThat(documentStore.find("interviews", String.valueOf(interviewId))).isNull();
+    }
+
+    @Test
+    void reschedulingInterviewPersistsItsNewTimeAndMode() {
+        String recruiterEmail = "reschedule-recruiter-" + UUID.randomUUID() + "@example.com";
+        long jobId = documentStore.nextId("jobs") + 10;
+        long candidateId = 99002L;
+        long applicationId = documentStore.nextId("applications") + 10;
+        documentStore.save("jobs", String.valueOf(jobId), Map.of(
+                "id", jobId, "title", "Reschedule Role", "recruiterEmail", recruiterEmail));
+        documentStore.save("applications", String.valueOf(applicationId), new java.util.LinkedHashMap<>(Map.of(
+                "id", applicationId,
+                "candidateId", candidateId,
+                "candidateName", "Reschedule Candidate",
+                "candidateEmail", "reschedule-candidate@example.com",
+                "jobId", jobId,
+                "jobTitle", "Reschedule Role",
+                "recruiterEmail", recruiterEmail,
+                "status", "shortlisted",
+                "timeline", java.util.List.of())));
+        Map<String, Object> created = applicationController.createInterview(Map.of(
+                "candidateId", candidateId,
+                "jobId", jobId,
+                "scheduledAt", LocalDateTime.now().plusDays(2).withNano(0).toString()), recruiterEmail);
+        Long interviewId = ((Number) created.get("id")).longValue();
+        LocalDateTime newTime = LocalDateTime.now().plusDays(4).withNano(0);
+
+        Map<String, Object> updated = applicationController.updateInterview(interviewId, Map.of(
+                "scheduledAt", newTime.toString(),
+                "mode", "In person"), recruiterEmail);
+
+        assertThat(updated)
+                .containsEntry("date", newTime.toLocalDate().toString())
+                .containsEntry("time", newTime.toLocalTime().toString())
+                .containsEntry("mode", "In person");
+        assertThat(documentStore.find("interviews", String.valueOf(interviewId)))
+                .containsEntry("mode", "In person");
     }
 }

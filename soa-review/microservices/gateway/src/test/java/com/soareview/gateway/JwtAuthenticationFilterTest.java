@@ -102,6 +102,11 @@ class JwtAuthenticationFilterTest {
         assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.POST, "/api/jobs", "USER")).isFalse();
         assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.POST, "/api/jobs", "RECRUITER")).isTrue();
         assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.POST, "/api/jobs", "ADMIN")).isFalse();
+        assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.PATCH, "/api/jobs/7/published", "USER")).isFalse();
+        assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.PATCH, "/api/jobs/7/published", "RECRUITER")).isTrue();
+        assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.DELETE, "/api/jobs/7", "USER")).isFalse();
+        assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.DELETE, "/api/jobs/7", "RECRUITER")).isTrue();
+        assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.DELETE, "/api/jobs/7/unknown", "RECRUITER")).isFalse();
         assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.POST, "/api/jobs/7/apply", "USER")).isTrue();
         assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.POST, "/api/jobs/7/apply", "RECRUITER")).isFalse();
         assertThat(JwtAuthenticationFilter.isAuthorized(HttpMethod.PATCH, "/api/applications/7/status", "USER")).isFalse();

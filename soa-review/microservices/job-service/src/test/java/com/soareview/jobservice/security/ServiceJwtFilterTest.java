@@ -73,6 +73,27 @@ class ServiceJwtFilterTest {
     }
 
     @Test
+    void blocksCandidatesFromPublishingOrDeletingJobs() throws Exception {
+        for (String[] operation : new String[][] {
+                {"PATCH", "/api/jobs/7/published"},
+                {"DELETE", "/api/jobs/7"}
+        }) {
+            MockHttpServletRequest request = authenticatedRequest(operation[0], operation[1], "USER");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+
+            filter.doFilter(request, response, mock(FilterChain.class));
+
+            assertThat(response.getStatus()).isEqualTo(HttpStatus.FORBIDDEN.value());
+        }
+    }
+
+    @Test
+    void allowsRecruitersToPublishOrDeleteJobs() {
+        assertThat(ServiceJwtFilter.isAuthorized("PATCH", "/api/jobs/7/published", "RECRUITER")).isTrue();
+        assertThat(ServiceJwtFilter.isAuthorized("DELETE", "/api/jobs/7", "RECRUITER")).isTrue();
+    }
+
+    @Test
     void allowsRecruitersAndRejectsAdminsFromRecruiterEndpoints() throws Exception {
         MockHttpServletResponse recruiterResponse = new MockHttpServletResponse();
         FilterChain recruiterChain = mock(FilterChain.class);

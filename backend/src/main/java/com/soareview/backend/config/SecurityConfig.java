@@ -39,7 +39,7 @@ public class SecurityConfig {
             .exceptionHandling(ex -> ex.authenticationEntryPoint(authenticationEntryPoint))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.POST, "/api/auth/login", "/api/auth/register", "/api/auth/request-otp", "/api/auth/verify-otp", "/api/auth/reset-password").permitAll()
-                .requestMatchers("/api/health", "/api/jobs", "/api/jobs/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/health", "/api/jobs", "/api/jobs/**").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/jobs").hasRole("ADMIN")
                 .requestMatchers("/h2-console/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")

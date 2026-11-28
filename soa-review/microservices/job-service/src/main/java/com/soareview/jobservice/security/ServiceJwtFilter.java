@@ -111,12 +111,19 @@ public class ServiceJwtFilter extends OncePerRequestFilter {
 
     static boolean isAuthorized(String method, String path, String role) {
         if (path.startsWith("/api/admin/")) return "RECRUITER".equals(role);
-        if ((HttpMethod.POST.matches(method) || HttpMethod.PUT.matches(method)) && "/api/jobs".equals(path)) {
+        if (HttpMethod.POST.matches(method) && "/api/jobs".equals(path)) {
             return "RECRUITER".equals(role);
         }
+        if (path.matches("/api/jobs/\\d+/apply")) {
+            return HttpMethod.POST.matches(method) && "USER".equals(role);
+        }
         if (HttpMethod.PUT.matches(method) && path.matches("/api/jobs/\\d+")) return "RECRUITER".equals(role);
-        if (HttpMethod.POST.matches(method) && path.matches("/api/jobs/\\d+/apply")) return "USER".equals(role);
+        if (HttpMethod.PATCH.matches(method) && path.matches("/api/jobs/\\d+/published")) return "RECRUITER".equals(role);
+        if (HttpMethod.DELETE.matches(method) && path.matches("/api/jobs/\\d+")) return "RECRUITER".equals(role);
         if (path.startsWith("/api/user/saved-jobs")) return "USER".equals(role);
+        if (path.equals("/api/jobs") || path.startsWith("/api/jobs/")) {
+            return false;
+        }
         return "USER".equals(role) || "RECRUITER".equals(role);
     }
 

@@ -96,12 +96,12 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
             return "RECRUITER".equals(role);
         }
 
-        if ((HttpMethod.POST.equals(method) || HttpMethod.PUT.equals(method)) && "/api/jobs".equals(path)) {
+        if (HttpMethod.POST.equals(method) && "/api/jobs".equals(path)) {
             return "RECRUITER".equals(role);
         }
-        if (HttpMethod.PUT.equals(method) && path.matches("/api/jobs/\\d+")) {
-            return "RECRUITER".equals(role);
-        }
+        if (HttpMethod.PUT.equals(method) && path.matches("/api/jobs/\\d+")) return "RECRUITER".equals(role);
+        if (HttpMethod.PATCH.equals(method) && path.matches("/api/jobs/\\d+/published")) return "RECRUITER".equals(role);
+        if (HttpMethod.DELETE.equals(method) && path.matches("/api/jobs/\\d+")) return "RECRUITER".equals(role);
         if (HttpMethod.POST.equals(method) && path.matches("/api/jobs/\\d+/apply")) {
             return "USER".equals(role);
         }
@@ -113,6 +113,9 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
         }
         if (path.equals("/api/applications") || path.matches("/api/applications/\\d+")) {
             return "USER".equals(role);
+        }
+        if (path.equals("/api/jobs") || path.startsWith("/api/jobs/")) {
+            return false;
         }
 
         return "ADMIN".equals(role) || "RECRUITER".equals(role) || "USER".equals(role);

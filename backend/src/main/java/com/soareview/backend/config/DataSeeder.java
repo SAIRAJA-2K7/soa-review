@@ -4,14 +4,18 @@ import com.soareview.backend.entity.*;
 import com.soareview.backend.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
 @Configuration
+@Profile({"dev", "test"})
+@ConditionalOnProperty(name = "legacy.backend.demo-data.enabled", havingValue = "true")
 @RequiredArgsConstructor
 public class DataSeeder {
 

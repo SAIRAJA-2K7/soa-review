@@ -104,6 +104,9 @@ public class ServiceJwtFilter extends OncePerRequestFilter {
     static boolean isAuthorized(String method, String path, String role) {
         if (path.startsWith("/api/internal/")) return "RECRUITER".equals(role) || "ADMIN".equals(role);
         if (path.startsWith("/api/admin/")) return "RECRUITER".equals(role);
+        if (HttpMethod.POST.matches(method) && "/api/applications".equals(path)) {
+            return "USER".equals(role);
+        }
         if (HttpMethod.PATCH.matches(method) && path.matches("/api/applications/\\d+/status")) {
             return "RECRUITER".equals(role);
         }

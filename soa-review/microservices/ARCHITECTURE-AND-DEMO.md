@@ -4,6 +4,8 @@
 
 TalentSync is an existing React/Vite hiring application backed by Spring Boot services. The browser uses the API Gateway; the gateway validates signed JWTs and routes requests to authentication, job, and application services. Eureka provides service registration and discovery.
 
+The supported runtime is the frontend plus this microservices stack. The separate repository-root `backend/` project is retained as a legacy reference, is not used by the frontend or launcher, and is not part of the supported deployment/demo path.
+
 ```mermaid
 sequenceDiagram
     participant C as Candidate browser
@@ -32,7 +34,7 @@ sequenceDiagram
     P->>P: Verify token, candidate, and job ownership
     P->>DB: Persist application and timeline
     R->>G: GET /api/admin/applications + recruiter JWT
-    G->>P: Enforce ADMIN role
+    G->>P: Enforce RECRUITER role
     P->>DB: Return only applications for this recruiter
     P-->>R: Recruiter application list
 ```
@@ -48,7 +50,7 @@ sequenceDiagram
 | Application | 8084 | Applications, recruiter candidates/pipeline, interviews, company profile, job mirror | PostgreSQL `application_service_documents` |
 | Frontend | 5173 (development) | Existing candidate/recruiter user interface | Browser session storage for JWT |
 
-Service data tables are owned by each service and store the existing JSON API payloads in text columns. Hibernate `ddl-auto: update` creates/updates these service-owned tables without dropping the monolith's existing domain tables. Auth users continue using their existing relational JPA model.
+Service data tables are owned by each service and store the existing JSON API payloads in text columns. Hibernate `ddl-auto: update` creates/updates these service-owned tables without dropping the legacy reference backend's domain tables. Auth users continue using their existing relational JPA model.
 
 ## Request and Security Behavior
 
@@ -60,7 +62,7 @@ Service data tables are owned by each service and store the existing JSON API pa
 - Gateway removes client-provided `X-User-Email` and `X-User-Role` headers and replaces them with verified claims.
 - Job/application/auth services validate the bearer token again, enforce role rules, and replace identity headers before controller handling.
 - The servlet filters replace `X-User-Email`, `X-User-Role`, and `X-User-Id` for both single-header and enumerated-header access used by Spring MVC; client-supplied identity headers are not authoritative.
-- Recruiter endpoints under `/api/admin/**` require `ADMIN`; candidate applications/saved jobs require `USER`; job create/edit and application status changes require `ADMIN`.
+- Recruiter endpoints under `/api/admin/**` require `RECRUITER`; application creation and saved-job operations require `USER`, including direct application-service calls; job mutations and application status changes require `RECRUITER`.
 - Candidate application reads are scoped to the JWT email. Recruiter job/application/interview/company reads and writes are scoped to the JWT email or the job's persisted owner.
 - The public auth service endpoints intentionally remain accessible without a token.
 - Job mirror synchronization uses an internal service route outside the gateway's public route table. It requires a verified recruiter JWT plus a separate `JOB_SYNC_SECRET` shared only by job-service and application-service.
@@ -114,10 +116,10 @@ Invoke-WebRequest http://localhost:8084/actuator/health
 
 ## Postman Demo Checklist
 
-1. `POST http://localhost:8080/api/auth/login`, raw JSON body:
+1. Create a candidate and recruiter account through the application or `POST /api/auth/register`, complete email OTP verification, then sign in through `POST http://localhost:8080/api/auth/login`. For a disposable local demo database, opt-in dev/test demo accounts are configured through the variables documented in [README.md](./README.md); do not rely on fixed credentials or use demo users in production.
 
 ```json
-{"email":"recruiter@demo.com","password":"password123"}
+{"email":"{{recruiter_email}}","password":"{{recruiter_password}}"}
 ```
 
 2. Copy the returned `token` into Postman **Authorization → Bearer Token**. A Postman environment variable can be set in the login request's Post-response script:
@@ -192,6 +194,16 @@ The same script provides a small, dependency-free **serial** latency/throughput 
 
 Record the request count, warm/cold state, instance count, requests/second, mean/median/p95 latency, and errors from the output. This script is a sequential smoke benchmark; the concurrency-8 result above came from a separate local .NET `HttpClient` probe. Neither run is a before/after performance comparison.
 
+For a disposable local PostgreSQL database and a verified recruiter token, run the CRUD distribution verifier. It creates uniquely named temporary jobs, verifies read-after-write and application-service mirroring, updates and publishes/unpublishes each job, deletes it, checks the deleted state, and removes any remaining test jobs on failure. It refuses non-loopback URLs and requires an explicit write acknowledgement:
+
+```powershell
+$env:TALENTSYNC_TEST_RECRUITER_TOKEN = $recruiterToken
+.\verify-crud-load-balancing.ps1 -AllowLocalTestWrites -ExpectedInstanceCount 2 -JobCount 10
+Remove-Item Env:TALENTSYNC_TEST_RECRUITER_TOKEN
+```
+
+The verifier requires `LOAD_BALANCING_INSTANCE_HEADER_ENABLED=true` on each job-service instance. It has been added as repeatable evidence tooling; until its output is captured against two instances and a disposable PostgreSQL database, it is not evidence that multi-instance CRUD writes have passed.
+
 ## PostgreSQL Integration Tests and Restart Persistence
 
 The regular Maven suite uses H2 for isolated tests. Three opt-in PostgreSQL tests exercise auth-user, job-document, and application-document persistence. They are skipped unless `SOA_REVIEW_POSTGRES_TEST_URL` is set, and reject any database name not ending in `_test` or `_integration`. They use `ddl-auto=update`, make only uniquely keyed test records, and delete those records; demo initialization can still add seed data, so use a dedicated disposable database only.
@@ -216,7 +228,7 @@ To verify real restart persistence after the stack is configured, create a recru
 
 **Where is it validated?** `gateway/JwtAuthenticationFilter.java` validates and routes; `auth-service/config/AuthJwtFilter.java`, `job-service/security/ServiceJwtFilter.java`, and `application-service/security/ServiceJwtFilter.java` independently validate downstream requests.
 
-**How are roles enforced?** Gateway and service filters distinguish `ADMIN` and `USER`; recruiter endpoints require `ADMIN`, and candidate write/read surfaces enforce candidate access and identity ownership.
+**How are roles enforced?** Gateway and service filters distinguish `RECRUITER` and `USER`; recruiter endpoints require `RECRUITER`, while candidate write/read surfaces enforce candidate access and identity ownership. `ADMIN` is not a public self-registration role.
 
 **How are services discovered?** Each service registers with Eureka. Gateway and job-service use service IDs; job-service communication uses Spring Cloud LoadBalancer.
 
@@ -226,14 +238,26 @@ To verify real restart persistence after the stack is configured, create a recru
 
 **Is the framework baseline currently supported?** Editor diagnostics report Spring Boot 3.3.x support ended. A supported upgrade requires coordinating Spring Boot and Spring Cloud versions and rerunning compatibility tests; that separate framework migration has not been performed.
 
-## Rubric Scorecard (Evidence-Based Estimate)
+## Current Engineering Verification — 2026-11-28
 
-Scores are estimates from the implementation and evidence in this workspace, not a guarantee of evaluator results. “Original” is the supplied audit score; a score changes only where this pass added a verifiable implementation or documentation improvement.
+- The microservices stack is the sole supported runtime. The root `backend/` project is legacy reference code; it now defaults to port `8090`, requires explicit database credentials and `JWT_SECRET`, disables the H2 console, and only enables demo seeding when both a `dev`/`test` profile and `legacy.backend.demo-data.enabled=true` are selected.
+- The legacy backend's public job rule now permits only GET requests. A focused MockMvc test verifies unauthenticated and candidate POST requests are rejected; the legacy backend suite passed **6 tests, 0 failures, 0 skips**.
+- Gateway and job-service filters now require a recruiter role for job update, publish/unpublish, and delete operations. Focused tests cover candidate denial and recruiter authorization.
+- The microservices reactor passed on Java 21: **68 tests, 0 failures, 0 errors, 3 skipped**. The three skips are opt-in PostgreSQL persistence tests; Docker is unavailable in this local environment.
+- The frontend production build passed. Vite emitted a bundle-size advisory for the minified JavaScript chunk exceeding 500 kB; the build itself succeeded.
+- Added `.github/workflows/quality.yml` to run the microservices suite against an ephemeral PostgreSQL service, the legacy backend suite, and the frontend build on pushes and pull requests. Its YAML parses locally, but the workflow has not yet run on GitHub.
+- Added `verify-crud-load-balancing.ps1` to exercise temporary job create/read/update/publish/delete, application-service mirror synchronization, and instance distribution. It requires a loopback gateway, an explicit write acknowledgement, a verified test recruiter token, and diagnostic instance headers. The script has passed PowerShell syntax parsing but has **not** been run against live services.
+- Local environment check: Node.js `24.4.1` is available; Docker is unavailable. No PostgreSQL test database, browser journey, multi-instance CRUD-write run, SMTP delivery, or cloud deployment was performed during this verification.
+- No score is claimed as 10/10 based only on source changes or unit tests. Capture the CI result and run the disposable-PostgreSQL/browser/load-balancing evidence before presenting full marks.
+
+## Historical Rubric Scorecard (2026-10-21 snapshot)
+
+The table below records an earlier estimate and is superseded by the dated verification record at the end of this document. It is not a current or guaranteed evaluator score.
 
 | # | Rubric | Original | Final estimate | Improvement/evidence in this pass | Exact requirement still missing for 10/10 |
 |---|---|---:|---|---|---|
 | 1 | Design Refinement | 6/10 | 6/10 | Existing service boundaries and persistence ownership remain explicit. | Map-based controller contracts, duplicated document-store patterns, and no shared API error schema. |
-| 2 | Service Implementation | 7/10 | 7/10 | Auth, jobs, applications, saved jobs, interviews, and company data persist; OTP challenge hashes and reset credential hashes are stored in PostgreSQL, with expiry and one-time-use tests. | Cross-instance PostgreSQL consumption, live SMTP/reset delivery, distributed rate limiting, broader profile/onboarding coverage, and job deletion are unverified or absent. |
+| 2 | Service Implementation | 7/10 | 7/10 | Auth, jobs, applications, saved jobs, interviews, and company data persist; OTP challenge hashes and reset credential hashes are stored in PostgreSQL, with expiry and one-time-use tests. | Cross-instance PostgreSQL consumption, live SMTP/reset delivery, distributed rate limiting, and PostgreSQL restart persistence remain unverified. |
 | 3 | JWT Authentication | 8/10 | 8/10 | Verified-account, signature/expiry, identity sanitization, and role/ownership tests pass. | No refresh/revocation, denylist, or demonstrated key rotation. |
 | 4 | API Gateway Configuration | 7/10 | 7/10 | Discovery routes, public/protected route behavior, role filter, and health access tests pass. | No rate limiting, request-size policy, or gateway-wide timeout/outage integration evidence. |
 | 5 | Inter-service Communication | 6/10 | 6/10 | Bounded connect/read timeouts, internal sync authentication, rollback unit coverage, and discovery-based service IDs. | Synchronous calls, no retry/circuit breaker/correlation ID; remote commit/response-loss consistency unverified. |
@@ -243,7 +267,7 @@ Scores are estimates from the implementation and evidence in this workspace, not
 | 9 | Testing Implementation | 7/10 | 7/10 | H2 coverage remains; added saved-job batch-lookup test and opt-in PostgreSQL tests for three services. | PostgreSQL tests were not executed; full HTTP workflow/browser tests are absent. |
 | 10 | Performance and Reliability | 5/10 | 6/10 | Removed saved-job N+1 document reads; measured a small local 120-request/concurrency-8 smoke run and retained a repeatable latency/error probe. | No before/after baseline; unbounded list reads, no pagination/pool tuning/circuit breaker, and DB query plans remain. |
 | 11 | Final System Implementation | 7/10 | 7/10 | Updated microservice JARs started against PostgreSQL; H2 regression tests and the existing frontend build pass. | No live applicant/recruiter workflow or business-record persistence across restart was verified. |
-| 12 | System Testing and Validation | 6/10 | 7/10 | Microservices suite, frontend build, live PostgreSQL connectivity/schema, gateway route, and service health were verified. | PostgreSQL CRUD/audit/reset scenarios, browser E2E, SMTP delivery, and a separate backend suite remain unverified/not present in this project directory. |
+| 12 | System Testing and Validation | 6/10 | 7/10 | Microservices suite, frontend build, live PostgreSQL connectivity/schema, gateway route, and service health were verified. | PostgreSQL CRUD/audit/reset scenarios, browser E2E, SMTP delivery, and an integrated run spanning the legacy reference backend remain unverified. |
 | 13 | Deployment and Execution | 6/10 | 7/10 | Launcher rebuilt and started services with ignored local configuration; script syntax and service health checks pass. | No production deployment, least-privilege DB account, secret rotation, or rollback evidence. |
 | 14 | Analytical Insights of Design | 7/10 | 8/10 | Architecture, trust boundaries, audit consistency limits, password-reset/OTP scaling caveats, multi-instance results, and measured benchmark conditions are documented. | No formal ADR history, query-plan analysis, or before/after benchmark comparison. |
 | 15 | Conceptual Clarity and Articulation | 8/10 | 9/10 | Demo, persistence limitations, multi-instance/failover results, measured performance, and remaining gaps are documented. | No evaluator feedback; PostgreSQL and complete workflow commands still need execution in a safe configured environment. |
@@ -252,7 +276,7 @@ Scores are estimates from the implementation and evidence in this workspace, not
 
 - Latest verification on 2026-10-21: the five-module microservices reactor passed `mvn test -q` on Java 21 with 51 tests across 16 suites, 0 failures, 0 errors, and 3 skipped PostgreSQL integration tests. The optional PostgreSQL tests were skipped because `SOA_REVIEW_POSTGRES_TEST_URL` was not configured; password-reset tests also cover recruiter-role accounts and per-email request throttling.
 - Latest frontend `npm run build` passed from the nested frontend directory; no frontend source was changed in this pass. The PowerShell parser check and `git diff --check` passed.
-- There is no separate `backend` Maven project under the current nested application directory, so no separate backend suite was run in this pass.
+- The repository-root `backend/` is a separate legacy reference project; it is not part of the nested microservices reactor and its tests are run separately.
 - The audit/password-reset integration tests use H2 and a mocked mail sender. They are code-level regression evidence, not live PostgreSQL, SMTP, or browser end-to-end verification.
 - The requested launcher rebuilt and started the updated service JARs. Eureka, gateway, auth, job, and application endpoints returned HTTP 200; gateway, job, and application health reported `UP`, and job/application actuator database components reported `UP`. The public gateway job-list request returned HTTP 200.
 - A read-only `psql` connection using the same local `.env` database settings succeeded for `talentsync` on port 5432 as `postgres`. The `users`, service document, three audit, OTP challenge, and password-reset tables were present; `users_id_seq` exists. Updated auth/job/application startup logs showed pool initialization and no password-authentication or sequence warning. The configured account is PostgreSQL's `postgres` superuser; no account or authentication rules were changed. Consider migrating to a dedicated least-privilege runtime account after defining and reviewing the required schema privileges.
@@ -269,9 +293,9 @@ Scores are estimates from the implementation and evidence in this workspace, not
 - Node.js is available, but the project-local Playwright package/browser is unavailable and the frontend dev server was not running. No browser flow was run. Although local mail settings are present, SMTP credentials/delivery were not validated, and no reset email was sent.
 - H2 fault injection verified a failed success-audit write rolls back a job mutation. When the separate failure-event write also fails, no audit row persists; the original request fails and its local business mutation remains rolled back. A self-suppression guard prevents the same exception instance from masking the original failure. This tests the job-service path only; PostgreSQL failure handling remains unverified.
 - Audit events now accept incoming correlation IDs only when they are canonical UUIDs; other client header values are replaced with a generated UUID. Job and application H2 audit tests verify arbitrary values are not stored. Auth profile auditing uses the same guard but has no dedicated integration test. No ordinary audit API endpoint was found, but database-level immutability is not enforced. Filter-level rejections and auth registration/login/OTP/password-reset paths are outside the current aspects; the internal mirrored-job write is also outside the application-service audit path.
-- The supported API surface has profile GET/PATCH; job list/detail/create/update; saved-job list/add/remove; application create/list/detail and recruiter status update; recruiter dashboard/list reads, interview creation, and company-profile read/update. No job-delete, application-withdraw, interview-update/reschedule/cancel, or candidate-profile-delete route was found. Job mirroring crosses service-local transactions without a distributed transaction; an application-service mirror could therefore remain if the job-service audit/commit later fails.
+- The supported API surface now includes profile GET/PATCH and resume upload/download/delete; job list/detail/create/update/publish/delete; saved-job list/add/remove; application create/list/detail/withdraw and recruiter status updates; recruiter dashboard/list reads; interview create/update/cancel; and company-profile read/update. These routes exist in source, but the complete candidate/recruiter sequence has not yet been exercised in a browser against a disposable PostgreSQL database. Job mirroring crosses service-local transactions without a distributed transaction; a mirror can remain inconsistent if a remote operation commits but its response is lost.
 - The auth profile controller invokes demo-user seeding during construction, and the seed definitions contain fixed source-level passwords. These accounts were not used for verification. Treat this as a production security risk: remove or explicitly gate demo seeding before production deployment, and rotate any such credentials if they were ever exposed.
-- Public registration accepts a client-supplied role and `UserService.normalizeRole` preserves `ADMIN`; no recruiter approval or invitation gate was found. This permits self-registration with recruiter/admin privileges and is a confirmed authorization defect. It was not changed in this verification pass because forcing a role would alter recruiter onboarding policy; define a trusted approval/provisioning rule before real-account testing or deployment.
+- At the time of this historical snapshot, public registration accepted a client-supplied role and preserved `ADMIN`, allowing privilege escalation. The later security-hardening change restricts registration to `USER` or `RECRUITER` and downgrades unsupported roles to `USER`; recruiter approval/invitation is intentionally not part of the current signup policy.
 - The currently running JAR processes were not restarted after the source-only audit changes. Their health checks confirm the pre-existing live processes and database connectivity, not that the new correlation-ID and failure-handling code is deployed. No restart or mutation was performed against the shared database.
 
 - Baseline before implementation: Java 21 Maven tests passed; `npm run build` passed. The initial nested-path Git status printed no changed paths; the final outer-repository status includes Eclipse metadata changes not manually edited by this work.
@@ -306,3 +330,9 @@ Scores are estimates from the implementation and evidence in this workspace, not
 - A read-only probe found HTTP 200 at gateway `8080`, job `8083`, application `8084`, Eureka `8761`, and gateway-routed auth health. Direct auth port `8081` was unavailable. These are existing processes, not the source revision tested above. No restart was performed because there is no approved disposable PostgreSQL database; no mutations were made against shared `talentsync`.
 - `SOA_REVIEW_POSTGRES_TEST_URL`, `SOA_REVIEW_POSTGRES_TEST_USERNAME`, and `SOA_REVIEW_POSTGRES_TEST_PASSWORD` remain unavailable. PostgreSQL persistence, audit rows, and restart behavior are therefore blocked; use a disposable `_test`/`_integration` database and a least-privilege test role, never `talentsync`.
 - Node.js `24.4.1` is available. `npx --yes playwright install chromium` exited 0 and installed Chromium after a transient FFmpeg download DNS retry. No project Playwright test package/config, dedicated applicant/recruiter test accounts, disposable database, local test mail receiver, or safe updated-code server was available, so browser workflows and mail delivery were not run. SMTP configuration presence is not evidence of successful delivery.
+
+## Current Follow-up
+
+- Frontend routes now load page components on demand. The production build passed; the initial JavaScript entry chunk is 281.08 kB minified (89.27 kB gzip), and the 380.08 kB chart chunk is loaded separately with analytics.
+- Application-service authorization now permits only `USER` tokens to create applications, including when the service is called directly. A regression test covers candidate allow and recruiter denial.
+- Maven could not be rerun for this follow-up because `mvn` is not available on the current PATH. The new Java regression test is therefore not yet verified here; previously recorded Maven results predate this change. The frontend build completed successfully.

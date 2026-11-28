@@ -65,6 +65,10 @@ Public job reads are `GET /api/jobs` and `GET /api/jobs/{id}`. Other job routes 
 - Service-owned audit tables record selected authenticated CRUD/list operations. Filter-level denials and auth login, OTP, and password-reset endpoints are not currently audited; representative H2 tests do not establish complete coverage or live PostgreSQL audit reliability.
 - Password-reset tokens are stored as hashes and are single-use with a 15-minute expiry. Email delivery and browser reset flows have not been live-verified; per-email throttling is process-local, and existing JWTs are not revoked after password changes.
 - Gateway and downstream JWT validation/role checks protect API routes. Keep downstream service ports private in deployments; direct-port network isolation is not configured by this local launcher.
-- Two-instance load balancing, performance, production secret rotation, and database migration rollback have not been verified.
+- A local two-instance job-list read probe has passed, but multi-instance CRUD writes, balancing of auth/application services, PostgreSQL failover, performance baselines, production secret rotation, and database migration rollback have not been verified.
 
 The existing frontend remains alongside these microservices; this launcher starts only the microservices.
+
+The microservices stack is the supported application runtime and is the only backend used by the frontend setup above. The separate `backend/` project at the repository root is retained as a legacy reference, is not included in this launcher, and now defaults to port `8090` so it cannot impersonate or conflict with the API Gateway on port `8080`. It requires explicit database credentials and a private JWT secret; demo data is disabled unless the `dev` or `test` profile and `legacy.backend.demo-data.enabled=true` are both set. Do not use that legacy backend for a deployment or evaluator demonstration.
+
+The repository workflow at `.github/workflows/quality.yml` runs the legacy backend tests, the microservices suite against an ephemeral PostgreSQL database (including the opt-in PostgreSQL persistence tests), and the frontend production build on pushes and pull requests. A green local run does not replace checking the actual GitHub Actions run after pushing.

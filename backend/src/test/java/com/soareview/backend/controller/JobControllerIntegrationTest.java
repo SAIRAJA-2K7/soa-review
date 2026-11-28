@@ -28,6 +28,41 @@ class JobControllerIntegrationTest {
     }
 
     @Test
+    void shouldRequireAdminRoleToCreateJobs() throws Exception {
+        String payload = """
+            {
+              "title": "Protected Job",
+              "companyName": "Northwind Labs",
+              "location": "Remote",
+              "type": "REMOTE",
+              "experience": "2-4 years",
+              "salaryMin": 120000,
+              "salaryMax": 160000,
+              "description": "A protected recruiter-only job."
+            }
+            """;
+
+        mockMvc.perform(post("/api/jobs")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(payload))
+            .andExpect(status().isUnauthorized());
+
+        MvcResult candidateLogin = mockMvc.perform(post("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"candidate@demo.com\",\"password\":\"password123\"}"))
+            .andExpect(status().isOk())
+            .andReturn();
+
+        String candidateToken = JsonPath.read(candidateLogin.getResponse().getContentAsString(), "$.token");
+
+        mockMvc.perform(post("/api/jobs")
+                .header("Authorization", "Bearer " + candidateToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(payload))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
     void shouldReturnRecruiterDashboardDataForAuthenticatedAdmin() throws Exception {
         MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)
